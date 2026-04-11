@@ -1,0 +1,31 @@
+# Charis G Platform — 백엔드 통합 의존성
+# pip install -r requirements.txt
+
+# 웹 프레임워크
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+
+# 인증
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.2.0
+
+# HTTP
+httpx>=0.27.0
+requests>=2.32.0
+
+# AI
+google-generativeai>=0.8.0
+# anthropic>=0.30.0
+
+# 데이터
+gspread>=6.0.0
+google-auth>=2.30.0
+Pillow>=10.0.0
+
+# 트렌드 (DS 전용)
+pytrends>=4.9.0
+
+# Pydantic
+pydantic>=2.10.0

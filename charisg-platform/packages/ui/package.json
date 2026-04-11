@@ -1,0 +1,21 @@
+{
+  "name": "@charisg/ui",
+  "version": "1.0.0",
+  "description": "Charis G Platform 공유 디자인 시스템 (Hub/DS/PA 공용)",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./tailwind.preset": "./tailwind.preset.js",
+    "./tokens.css": "./src/styles/tokens.css"
+  },
+  "peerDependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-router-dom": "^6.28.0"
+  },
+  "dependencies": {
+    "clsx": "^2.1.0",
+    "recharts": "^2.15.0"
+  }
+}

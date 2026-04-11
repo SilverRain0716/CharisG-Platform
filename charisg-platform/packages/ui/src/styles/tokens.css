@@ -1,0 +1,34 @@
+/* Charis G Platform 디자인 토큰 */
+:root {
+  --color-shell:    #0f172a;
+  --color-ds-500:   #14b8a6;
+  --color-ds-600:   #0d9488;
+  --color-pa-500:   #8b5cf6;
+  --color-pa-600:   #7c3aed;
+
+  --color-bg:       #f8fafc;
+  --color-surface:  #ffffff;
+  --color-border:   #e2e8f0;
+
+  --color-ink-900:  #0f172a;
+  --color-ink-700:  #334155;
+  --color-ink-500:  #64748b;
+  --color-ink-300:  #cbd5e1;
+
+  --color-ok:   #10b981;
+  --color-warn: #f59e0b;
+  --color-err:  #ef4444;
+  --color-info: #3b82f6;
+
+  --radius:     8px;
+  --radius-lg:  12px;
+
+  --shadow-card: 0 1px 3px 0 rgb(15 23 42 / 0.06), 0 1px 2px -1px rgb(15 23 42 / 0.06);
+}
+
+html, body {
+  background: var(--color-bg);
+  color: var(--color-ink-900);
+  font-family: 'Pretendard Variable', 'Pretendard', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

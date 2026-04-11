@@ -1,0 +1,17 @@
+{
+  "name": "charisg-platform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:shell": "pnpm --filter @charisg/shell-app dev",
+    "dev:ds":    "pnpm --filter @charisg/dropshipping-app dev",
+    "dev:pa":    "pnpm --filter @charisg/purchase-app dev",
+    "build":     "pnpm -r build",
+    "selftest":  "bash scripts/selftest.sh"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
