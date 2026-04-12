@@ -126,7 +126,7 @@ async def download_product_images(product_id: int, images_json: str) -> dict:
             "failed": 0, "local_urls": [], "main_image_url": "",
         }
 
-    # 기존 캐시 확인 — 이미 다운로드된 이미지가 있으면 재사용
+    # 기존 캐시 확인 — 캐시 수 ≥ 요청 수이면 재사용, 부족하면 전체 재다운로드
     with get_db() as conn:
         existing = conn.execute(
             "SELECT local_path, public_url FROM image_cache WHERE product_id=? ORDER BY image_idx",
@@ -134,15 +134,24 @@ async def download_product_images(product_id: int, images_json: str) -> dict:
         ).fetchall()
 
     if existing:
-        # 파일이 실제로 존재하는지 확인
         valid = [r for r in existing if Path(r["local_path"]).exists()]
-        if valid:
+        if valid and len(valid) >= len(image_urls):
             urls = [r["public_url"] for r in valid]
             return {
                 "product_id": product_id, "downloaded": len(urls),
                 "failed": 0, "local_urls": urls,
                 "main_image_url": urls[0], "cached": True,
             }
+        # 캐시 부족 → 기존 캐시 삭제 후 전체 재다운로드
+        if len(valid) < len(image_urls):
+            logger.info(f"📸 product {product_id}: 캐시 {len(valid)}장 < 요청 {len(image_urls)}장 → 재다운로드")
+            for r in existing:
+                try:
+                    Path(r["local_path"]).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            with get_db() as conn2:
+                conn2.execute("DELETE FROM image_cache WHERE product_id=?", (product_id,))
 
     product_dir = IMAGES_DIR / str(product_id)
     product_dir.mkdir(parents=True, exist_ok=True)
