@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, DataTable, StatusBadge } from '@charisg/ui';
 import { pa } from '../api/pa.js';
@@ -31,19 +31,59 @@ export default function CoupangPage() {
     queryFn: pa.coupangListings,
   });
   const [previewHtml, setPreviewHtml] = useState(null);
-  const [bulkResult, setBulkResult] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(null);
+  const jobIdRef = useRef(null);
+
+  useEffect(() => {
+    const poll = async () => {
+      const jid = jobIdRef.current;
+      if (!jid) return;
+      try {
+        const job = await pa.coupangUploadStatus(jid);
+        const done = job.status === 'done' || job.status === 'error';
+        setUploadProgress({
+          pct: job.pct ?? 0, processed: job.processed, errors: job.errors,
+          total: job.total, status: job.status, message: job.error_message,
+        });
+        if (done) {
+          jobIdRef.current = null;
+          qc.invalidateQueries({ queryKey: ['pa', 'coupang', 'listings'] });
+        }
+      } catch {}
+    };
+    const id = setInterval(poll, 3000);
+    return () => clearInterval(id);
+  }, [qc]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await pa.coupangUploadJob();
+        if (res.job) {
+          jobIdRef.current = res.job.id;
+          setUploadProgress({
+            pct: res.job.pct ?? 0, processed: res.job.processed, errors: res.job.errors,
+            total: res.job.total, status: res.job.status,
+          });
+        }
+      } catch {}
+    })();
+  }, []);
 
   const upload = useMutation({
     mutationFn: (pid) => pa.uploadCoupang(pid),
     onSettled: () => qc.invalidateQueries({ queryKey: ['pa', 'coupang', 'listings'] }),
   });
 
-  const uploadAll = useMutation({
-    mutationFn: () => pa.uploadAllCoupang(),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['pa', 'coupang', 'listings'] }),
-    onSuccess: (res) => setBulkResult(res),
-    onError: (e) => setBulkResult({ error: e.message }),
-  });
+  const startUploadAll = useCallback(async () => {
+    setUploadProgress({ pct: 0, processed: 0, errors: 0, total: 0, status: 'running' });
+    try {
+      const res = await pa.uploadAllCoupang();
+      jobIdRef.current = res.job_id;
+    } catch (e) {
+      setUploadProgress({ pct: 0, status: 'error', message: e.message || '업로드 시작 실패' });
+    }
+  }, []);
 
   const handlePreview = async (productId) => {
     try {
@@ -66,23 +106,37 @@ export default function CoupangPage() {
         {pendingCount > 0 && (
           <Button
             variant="ds"
-            disabled={uploadAll.isPending}
-            onClick={() => { setBulkResult(null); uploadAll.mutate(); }}
+            disabled={uploadProgress?.status === 'running'}
+            onClick={startUploadAll}
           >
-            {uploadAll.isPending ? '업로드 중…' : `전체 리스팅 (${pendingCount}건)`}
+            {uploadProgress?.status === 'running'
+              ? `업로드 중… ${uploadProgress.pct ?? 0}%`
+              : `전체 리스팅 (${pendingCount}건)`}
           </Button>
         )}
       </header>
 
-      {bulkResult && (
+      {uploadProgress && (
         <Card padded>
-          <div className="flex items-center justify-between text-sm">
-            <span>
-              {bulkResult.error
-                ? `오류: ${bulkResult.error}`
-                : `업로드 완료 — 성공 ${bulkResult.uploaded}건, 실패 ${bulkResult.errors}건`}
-            </span>
-            <Button size="sm" variant="ghost" onClick={() => setBulkResult(null)}>닫기</Button>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span>
+                {uploadProgress.status === 'done'
+                  ? `업로드 완료 — 성공 ${uploadProgress.processed}건, 실패 ${uploadProgress.errors}건`
+                  : uploadProgress.status === 'error'
+                    ? `오류: ${uploadProgress.message || '알 수 없는 오류'}`
+                    : `업로드 중 ${uploadProgress.processed + uploadProgress.errors}/${uploadProgress.total}`}
+              </span>
+              {uploadProgress.status !== 'running' && (
+                <Button size="sm" variant="ghost" onClick={() => setUploadProgress(null)}>닫기</Button>
+              )}
+            </div>
+            <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-blue-500 transition-all duration-300"
+                style={{ width: `${uploadProgress.pct ?? 0}%` }}
+              />
+            </div>
           </div>
         </Card>
       )}

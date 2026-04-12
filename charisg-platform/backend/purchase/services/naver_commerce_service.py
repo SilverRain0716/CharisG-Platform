@@ -4,6 +4,7 @@ naver_commerce_service.py — 네이버 커머스 API (스마트스토어 v2).
 bcrypt 토큰 인증, 상품 등록/수정/삭제. (스마트스토어 4/29 customsDutyInfo 필수)
 EC2 의존: NAVER_COMMERCE_CLIENT_ID/SECRET .env 필요.
 """
+import base64
 import logging
 import time
 from typing import Optional
@@ -19,7 +20,7 @@ BASE = "https://api.commerce.naver.com/external"
 
 
 def _get_token() -> Optional[str]:
-    """네이버 커머스 OAuth — bcrypt 서명 기반.
+    """네이버 커머스 OAuth — bcrypt 서명 + base64 인코딩.
 
     Note: timestamp 는 현재시각 - 3초 (서버 시각 오차 보정).
     """
@@ -30,8 +31,8 @@ def _get_token() -> Optional[str]:
     ts = int((time.time() - 3) * 1000)
     msg = f"{NAVER_COMMERCE_CLIENT_ID}_{ts}"
     salt = NAVER_COMMERCE_CLIENT_SECRET.encode()
-    sig = bcrypt.hashpw(msg.encode(), salt).decode()
-    sig_b64 = sig  # 네이버 사양: bcrypt 결과 그대로 base64
+    hashed = bcrypt.hashpw(msg.encode(), salt)
+    sig_b64 = base64.standard_b64encode(hashed).decode()
 
     try:
         r = requests.post(
@@ -52,6 +53,34 @@ def _get_token() -> Optional[str]:
         return None
 
 
+def upload_image(file_path: str) -> Optional[str]:
+    """이미지 파일을 네이버에 업로드 후 URL 반환."""
+    token = _get_token()
+    if not token:
+        return None
+    try:
+        import mimetypes
+        mime = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+        with open(file_path, "rb") as f:
+            r = requests.post(
+                BASE + "/v1/product-images/upload",
+                files={"imageFiles": (file_path.split("/")[-1], f, mime)},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+        if r.status_code >= 400:
+            logger.error(f"네이버 이미지 업로드 실패: {r.status_code} {r.text[:200]}")
+            return None
+        data = r.json()
+        images = data.get("images") or []
+        if images:
+            return images[0].get("url")
+        return None
+    except Exception as e:
+        logger.error(f"네이버 이미지 업로드 예외: {e}")
+        return None
+
+
 def register_product(payload: dict) -> Optional[dict]:
     """상품 등록 (POST /v1/products)."""
     token = _get_token()
@@ -59,7 +88,7 @@ def register_product(payload: dict) -> Optional[dict]:
         return None
     try:
         r = requests.post(
-            BASE + "/v1/products",
+            BASE + "/v2/products",
             json=payload,
             headers={"Authorization": f"Bearer {token}"},
             timeout=15,

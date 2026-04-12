@@ -137,10 +137,9 @@ PA_SECTION_NOTICE = """<div style="background:#1B3A5C;padding:50px 40px 30px;tex
       <span style="font-size:16px;color:#999">*개인통관고유부호 발급 당시의 성함과 연락처 등의 정보가 바뀐 경우는 변경 &amp; 재발급을 부탁드립니다.</span>
     </div>
     <div style="background:#F0F7FF;border-radius:10px;padding:16px 24px;margin:0 28px 24px;border:1px solid #D0E3F7;text-align:center">
-      <p style="font-size:16px;color:#555;margin:0 0 12px;font-weight:600">📋 개인통관고유부호가 없으신가요?</p>
-      <a href="https://unipass.customs.go.kr/csp/persIndex.do" target="_blank" style="display:inline-block;background:#1B3A5C;color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:600">
-        관세청 개인통관고유부호 발급 바로가기 →
-      </a>
+      <p style="font-size:16px;color:#555;margin:0 0 8px;font-weight:600">📋 개인통관고유부호가 없으신가요?</p>
+      <p style="font-size:14px;color:#1B3A5C;font-weight:600;margin:0">관세청 개인통관고유부호 발급 바로가기 →</p>
+      <p style="font-size:13px;color:#888;margin:4px 0 0">unipass.customs.go.kr/per/persIndex.do</p>
     </div>
   </div>
   <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
@@ -193,11 +192,11 @@ PA_SECTION_AMAZON_NOTICE = """<div style="background:linear-gradient(135deg,#232
     </p>
   </div>
   <!-- 네이버 톡톡 배너 -->
-  <a href="https://talk.naver.com/W8HB1FX" target="_blank" style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-decoration:none;text-align:center;border:1px solid #02A348">
+  <div style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348">
     <div style="font-size:22px;font-weight:800;color:#fff;margin-bottom:6px">💬 네이버 톡톡 상담</div>
-    <p style="font-size:16px;color:rgba(255,255,255,0.85);margin:0">궁금한 점이 있으시면 톡톡으로 편하게 문의해주세요!</p>
-    <div style="display:inline-block;background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.4);border-radius:20px;padding:6px 20px;margin-top:12px;font-size:14px;font-weight:600;color:#fff">톡톡 문의하기 →</div>
-  </a>
+    <p style="font-size:16px;color:rgba(255,255,255,0.85);margin:0">궁금한 점이 있으시면 네이버 톡톡으로 편하게 문의해주세요!</p>
+    <div style="display:inline-block;background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.4);border-radius:20px;padding:6px 20px;margin-top:12px;font-size:14px;font-weight:600;color:#fff">스토어 채팅에서 "톡톡 문의" 클릭</div>
+  </div>
   <div style="background:#F5F8FC;border-radius:14px;padding:24px 28px;margin-bottom:20px;border:1px solid #D6E4F0">
     <div style="font-size:20px;font-weight:700;color:#232F3E;margin-bottom:10px">
       <span style="color:#FF9900;font-weight:800;margin-right:8px">amazon</span> 🌍 해외 상품 안내
@@ -338,16 +337,22 @@ async def process_product(product_id: int, platform: str = "smartstore") -> dict
         description=description_ko or "",
     )
     seo_title = seo_result.get("optimized_title") or title_ko
+    if len(title_ko) > 100:
+        title_ko = seo_title[:100] if len(seo_title) <= 100 else seo_title[:97] + "..."
     seo_tags_list = seo_result.get("tags") or seo_result.get("keywords") or []
     seo_tags = json.dumps(seo_tags_list, ensure_ascii=False) if seo_tags_list else "[]"
 
-    # 3. 카테고리 매핑
-    cat_result = await map_category(
-        product_name=title_ko,
-        source_category=row.get("category_path") or "",
-        target_platform=platform,
-    )
-    mapped_category = cat_result.get("mapped_category") or row.get("category_path") or ""
+    # 3. 카테고리 매핑 (이미 숫자 ID가 설정되어 있으면 스킵)
+    existing_cat = row.get("category_path") or ""
+    if existing_cat.isdigit():
+        mapped_category = existing_cat
+    else:
+        cat_result = await map_category(
+            product_name=title_ko,
+            source_category=existing_cat,
+            target_platform=platform,
+        )
+        mapped_category = cat_result.get("mapped_category") or existing_cat
 
     # 4. HTML 생성 (PA 전용 템플릿)
     image_urls = img_result.get("local_urls") or []

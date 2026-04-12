@@ -398,9 +398,11 @@ def _build_seo_prompt(
 {rules}
 상품 설명: {description[:500] if description else '없음'}
 
+**중요**: optimized_title은 반드시 100자 이내여야 합니다. 원본이 길면 불필요한 스펙(CL 타이밍, 세부 규격 등)을 제거하고 브랜드+핵심스펙+용도만 남겨 축약하세요.
+
 JSON으로만 답변하세요 (다른 텍스트 없이):
 {{
-  "optimized_title": "SEO 최적화된 상품명",
+  "optimized_title": "SEO 최적화된 상품명 (100자 이내 필수)",
   "keywords": ["핵심키워드1", "핵심키워드2", ...최대 10개],
   "tags": ["태그1", "태그2", ...최대 13개]
 }}"""

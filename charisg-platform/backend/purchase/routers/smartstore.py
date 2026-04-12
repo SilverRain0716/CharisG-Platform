@@ -1,5 +1,8 @@
 """PA Smartstore — 네이버 스마트스토어 리스팅 조회 + 업로드."""
+import asyncio
 import logging
+import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -10,6 +13,9 @@ from backend.purchase.services.smartstore_lister import list_product, build_payl
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pa/smartstore", tags=["pa-smartstore"])
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @router.get("/listings")
@@ -33,7 +39,7 @@ def upload(product_id: int, user: dict = Depends(current_user)):
 
 
 @router.post("/upload-all")
-def upload_all(user: dict = Depends(current_user)):
+async def upload_all(user: dict = Depends(current_user)):
     with get_db() as conn:
         rows = conn.execute(
             """SELECT l.product_id FROM listings_pa l
@@ -43,21 +49,86 @@ def upload_all(user: dict = Depends(current_user)):
     if not rows:
         raise HTTPException(400, "업로드 대상 없음 (pending 상태 리스팅 필요)")
 
-    results = []
-    errors = []
-    for r in rows:
-        pid = r["product_id"]
+    running = _get_running_upload("smartstore")
+    if running:
+        raise HTTPException(409, f"이미 실행 중인 업로드 job 있음: {running['id']}")
+
+    product_ids = [r["product_id"] for r in rows]
+    job_id = uuid.uuid4().hex[:12]
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO batch_jobs (id, job_type, status, total, created_at)
+               VALUES (?, 'smartstore_upload', 'pending', ?, ?)""",
+            (job_id, len(product_ids), _now_iso()),
+        )
+    asyncio.create_task(_run_upload_background(job_id, product_ids, "smartstore"))
+    return {"job_id": job_id, "total": len(product_ids)}
+
+
+@router.get("/upload-all/{job_id}")
+def upload_status(job_id: str, user: dict = Depends(current_user)):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM batch_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "job 없음")
+    job = dict(row)
+    pct = round(((job["processed"] + job["errors"]) / job["total"]) * 100, 1) if job["total"] else 0
+    return {**job, "pct": pct}
+
+
+@router.get("/upload-job")
+def upload_current(user: dict = Depends(current_user)):
+    job = _get_running_upload("smartstore")
+    if not job:
+        return {"job": None}
+    pct = round(((job["processed"] + job["errors"]) / job["total"]) * 100, 1) if job["total"] else 0
+    return {"job": {**job, "pct": pct}}
+
+
+def _get_running_upload(channel: str) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM batch_jobs WHERE job_type=? AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
+            (f"{channel}_upload",),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+async def _run_upload_background(job_id: str, product_ids: list[int], channel: str):
+    processed = 0
+    errors = 0
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE batch_jobs SET status='running', started_at=? WHERE id=?",
+            (_now_iso(), job_id),
+        )
+
+    for pid in product_ids:
         try:
             res = list_product(pid)
             if not res.get("ok"):
                 raise ValueError(res.get("error", "업로드 실패"))
             mark_images_for_deletion(pid)
-            results.append({"product_id": pid, "ok": True})
+            processed += 1
         except Exception as e:
-            logger.warning(f"[smartstore-upload-all] product {pid} 실패: {e}")
-            errors.append({"product_id": pid, "error": str(e)})
+            errors += 1
+            logger.warning(f"[{channel}-upload-all] product {pid} 실패: {e}")
 
-    return {"uploaded": len(results), "errors": len(errors), "error_details": errors}
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE batch_jobs SET processed=?, errors=?, current_product_id=? WHERE id=?",
+                (processed, errors, pid, job_id),
+            )
+        await asyncio.sleep(0)
+
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE batch_jobs SET status='done', processed=?, errors=?, finished_at=?,
+               current_product_id=NULL WHERE id=?""",
+            (processed, errors, _now_iso(), job_id),
+        )
+    logger.info(f"[{channel}-upload-all] 완료 — 성공 {processed}, 실패 {errors}/{len(product_ids)}")
 
 
 @router.get("/preview/{product_id}")

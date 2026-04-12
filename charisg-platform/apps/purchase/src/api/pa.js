@@ -57,8 +57,12 @@ export const pa = {
   // Upload
   uploadSmartstore: (pid) => apiFetch(`/api/pa/smartstore/upload/${pid}`, { method: 'POST' }),
   uploadCoupang:    (pid) => apiFetch(`/api/pa/coupang/upload/${pid}`, { method: 'POST' }),
-  uploadAllSmartstore: () => apiFetch('/api/pa/smartstore/upload-all', { method: 'POST' }),
-  uploadAllCoupang:    () => apiFetch('/api/pa/coupang/upload-all', { method: 'POST' }),
+  uploadAllSmartstore:       () => apiFetch('/api/pa/smartstore/upload-all', { method: 'POST' }),
+  uploadAllCoupang:          () => apiFetch('/api/pa/coupang/upload-all', { method: 'POST' }),
+  smartstoreUploadJob:       () => apiFetch('/api/pa/smartstore/upload-job'),
+  smartstoreUploadStatus:    (jobId) => apiFetch(`/api/pa/smartstore/upload-all/${jobId}`),
+  coupangUploadJob:          () => apiFetch('/api/pa/coupang/upload-job'),
+  coupangUploadStatus:       (jobId) => apiFetch(`/api/pa/coupang/upload-all/${jobId}`),
 
   // Orders
   ordersKanban:   () => apiFetch('/api/pa/orders/kanban'),

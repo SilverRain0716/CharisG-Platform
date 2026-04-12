@@ -1,2 +1,2 @@
--- v6: sourcing_candidates에 image_url 컬럼 추가 (상품 이미지 URL)
-ALTER TABLE sourcing_candidates ADD COLUMN image_url TEXT;
+-- v6: sourcing_candidates.image_url (이미 schema_pa.sql에 포함되어 있으므로 no-op)
+SELECT 1;
