@@ -95,6 +95,7 @@ def register_product(payload: dict) -> Optional[dict]:
         )
         if r.status_code >= 400:
             logger.error(f"네이버 상품 등록 실패: {r.status_code} {r.text[:200]}")
+            return None
         return r.json()
     except Exception as e:
         logger.error(f"네이버 등록 예외: {e}")
