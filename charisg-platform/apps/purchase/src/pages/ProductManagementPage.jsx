@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, DataTable, StatusBadge } from '@charisg/ui';
 import { pa } from '../api/pa.js';
@@ -26,6 +26,66 @@ export default function ProductManagementPage() {
 
   const [batchProgress, setBatchProgress] = useState(null);
   const [generatingId, setGeneratingId] = useState(null);
+  const [previewHtml, setPreviewHtml] = useState(null);
+  const jobIdRef = useRef(null);
+  const pollRef = useRef(null);
+
+  // 폴링: jobIdRef에 job_id가 있으면 2초마다 상태 조회
+  useEffect(() => {
+    const poll = async () => {
+      const jid = jobIdRef.current;
+      if (!jid) return;
+      try {
+        const job = await pa.getBatchJobStatus(jid);
+        const done = job.status === 'done' || job.status === 'error';
+        setBatchProgress({
+          pct: job.pct ?? 0,
+          current: job.processed + job.errors,
+          total: job.total,
+          processed: job.processed,
+          errors: job.errors,
+          status: job.status,
+          message: job.error_message,
+        });
+        if (done) {
+          jobIdRef.current = null;
+          qc.invalidateQueries({ queryKey: ['pa', 'products'] });
+        }
+      } catch { /* 네트워크 오류 무시, 다음 폴링에서 재시도 */ }
+    };
+
+    pollRef.current = setInterval(poll, 2000);
+    return () => clearInterval(pollRef.current);
+  }, [qc]);
+
+  // 페이지 진입 시 실행 중인 job 자동 감지
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await pa.getCurrentBatchJob();
+        if (res.job) {
+          jobIdRef.current = res.job.id;
+          setBatchProgress({
+            pct: res.job.pct ?? 0,
+            current: res.job.processed + res.job.errors,
+            total: res.job.total,
+            processed: res.job.processed,
+            errors: res.job.errors,
+            status: res.job.status,
+          });
+        }
+      } catch { /* ignore */ }
+    })();
+  }, []);
+
+  const handlePreview = async (productId) => {
+    try {
+      const detail = await pa.getDetailPage(productId);
+      setPreviewHtml(detail.html_content || '<p>상세페이지 없음</p>');
+    } catch {
+      setPreviewHtml('<p>상세페이지를 불러올 수 없습니다.</p>');
+    }
+  };
 
   const generate = useMutation({
     mutationFn: (pid) => pa.generateDetail(pid),
@@ -46,41 +106,17 @@ export default function ProductManagementPage() {
     },
   });
 
-  const startBatch = useCallback(async () => {
+  const startBatchJob = useCallback(async (body) => {
     setBatchProgress({ pct: 0, current: 0, total: 0, status: 'running' });
     try {
-      const res = await pa.generateDetailBatch({ all_unprocessed: true });
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const payload = JSON.parse(line.slice(6));
-            if (payload.event === 'done') {
-              setBatchProgress({ pct: 100, ...payload, status: 'done' });
-            } else {
-              setBatchProgress((prev) => ({ ...prev, ...payload, status: 'running' }));
-            }
-          } catch { /* skip malformed */ }
-        }
-      }
+      const res = await pa.startBatchJob(body);
+      jobIdRef.current = res.job_id;
     } catch (e) {
-      setBatchProgress((prev) => ({ ...prev, status: 'error', message: e.message }));
-    } finally {
-      qc.invalidateQueries({ queryKey: ['pa', 'products'] });
+      setBatchProgress({ pct: 0, status: 'error', message: e.message || '배치 시작 실패' });
     }
-  }, [qc]);
+  }, []);
 
+  const totalCount = data?.items?.length || 0;
   const unprocessedCount = data?.items?.filter((r) => !r.ai_processed_at).length || 0;
   const sendableCount = data?.items?.filter((r) => r.ai_processed_at).length || 0;
 
@@ -118,15 +154,15 @@ export default function ProductManagementPage() {
               {bulkSending ? '전송 중…' : `전체 채널 보내기 (${sendableCount}건)`}
             </Button>
           )}
-          {unprocessedCount > 0 && (
+          {totalCount > 0 && (
             <Button
               variant="pa"
               disabled={batchProgress?.status === 'running'}
-              onClick={startBatch}
+              onClick={() => startBatchJob({ all_products: true })}
             >
               {batchProgress?.status === 'running'
-                ? `AI 처리 중… ${batchProgress.pct ?? 0}%`
-                : `전체 AI 처리 (${unprocessedCount}건)`}
+                ? `상세 생성 중… ${batchProgress.pct ?? 0}%`
+                : `전체 상세 생성 (${totalCount}건${unprocessedCount > 0 ? `, 미처리 ${unprocessedCount}` : ''})`}
             </Button>
           )}
         </div>
@@ -138,9 +174,9 @@ export default function ProductManagementPage() {
             <div className="flex items-center justify-between text-sm">
               <span>
                 {batchProgress.status === 'done'
-                  ? `완료 — 성공 ${batchProgress.processed}건, 실패 ${batchProgress.errors}건 (${batchProgress.elapsed_sec}초)`
+                  ? `완료 — 성공 ${batchProgress.processed}건, 실패 ${batchProgress.errors}건`
                   : batchProgress.status === 'error'
-                    ? `오류: ${batchProgress.message}`
+                    ? `오류: ${batchProgress.message || '알 수 없는 오류'}`
                     : `처리 중 ${batchProgress.current}/${batchProgress.total}`}
               </span>
               {batchProgress.status !== 'running' && (
@@ -170,6 +206,21 @@ export default function ProductManagementPage() {
         </Card>
       )}
 
+      {previewHtml && (
+        <Card title="상세페이지 프리뷰" padded>
+          <div className="flex justify-end mb-2">
+            <Button size="sm" variant="ghost" onClick={() => setPreviewHtml(null)}>닫기</Button>
+          </div>
+          <iframe
+            srcDoc={previewHtml}
+            className="w-full border rounded-lg"
+            style={{ height: '600px' }}
+            sandbox="allow-same-origin"
+            title="detail-preview"
+          />
+        </Card>
+      )}
+
       <Card title={`활성 상품 (${data?.total || 0})`} padded={false}>
         {isLoading ? (
           <div className="p-8 text-center text-sm text-ink-400">로딩 중...</div>
@@ -190,6 +241,14 @@ export default function ProductManagementPage() {
                       onClick={() => generate.mutate(row.id)}
                     >
                       {generatingId === row.id ? '처리중…' : '상세생성'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!row.ai_processed_at}
+                      onClick={() => handlePreview(row.id)}
+                    >
+                      프리뷰
                     </Button>
                     <Button
                       size="sm"

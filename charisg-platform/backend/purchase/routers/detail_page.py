@@ -1,14 +1,19 @@
 """PA Detail Page — AI 번역 + SEO + 상세페이지 HTML 생성."""
+import asyncio
 import json
-import time
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
-from backend.purchase.services.ai_processor import process_product, process_batch
+from backend.purchase.services.ai_processor import (
+    process_product,
+    create_batch_job,
+    get_batch_job,
+    get_running_job,
+    run_batch_background,
+)
 
 router = APIRouter(prefix="/api/pa/detail-page", tags=["pa-detail-page"])
 
@@ -26,17 +31,29 @@ async def generate(product_id: int, user: dict = Depends(current_user)):
     return result
 
 
-# ── SSE 일괄 생성 ──────────────────────────────
+# ── 백그라운드 배치 생성 ──────────────────────────
 
 class BatchBody(BaseModel):
     product_ids: list[int] | None = None
     all_unprocessed: bool = False
+    all_products: bool = False
     platform: str = "smartstore"
 
 
 @router.post("/batch")
 async def batch_generate(body: BatchBody, user: dict = Depends(current_user)):
-    if body.all_unprocessed:
+    # 이미 실행 중인 job이 있으면 거부
+    running = get_running_job()
+    if running:
+        raise HTTPException(409, f"이미 실행 중인 배치 job 있음: {running['id']}")
+
+    if body.all_products:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM products WHERE business_model='purchase' ORDER BY id"
+            ).fetchall()
+        product_ids = [r["id"] for r in rows]
+    elif body.all_unprocessed:
         with get_db() as conn:
             rows = conn.execute(
                 "SELECT id FROM products WHERE ai_processed_at IS NULL ORDER BY id"
@@ -45,28 +62,33 @@ async def batch_generate(body: BatchBody, user: dict = Depends(current_user)):
     elif body.product_ids:
         product_ids = body.product_ids
     else:
-        raise HTTPException(400, "product_ids 또는 all_unprocessed=true 필요")
+        raise HTTPException(400, "product_ids, all_unprocessed, 또는 all_products 필요")
 
     if not product_ids:
         raise HTTPException(400, "처리 대상 상품 없음")
 
-    async def event_stream():
-        t0 = time.time()
-        async for item in process_batch(product_ids, body.platform):
-            if item.get("event") == "done":
-                item["elapsed_sec"] = round(time.time() - t0, 1)
-                yield f"event: done\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
-            else:
-                yield f"event: progress\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
+    job_id = create_batch_job(product_ids, body.platform)
+    asyncio.create_task(run_batch_background(job_id, product_ids, body.platform))
+    return {"job_id": job_id, "total": len(product_ids)}
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+
+@router.get("/batch/{job_id}")
+def batch_status(job_id: str, user: dict = Depends(current_user)):
+    job = get_batch_job(job_id)
+    if not job:
+        raise HTTPException(404, "배치 job 없음")
+    pct = round(((job["processed"] + job["errors"]) / job["total"]) * 100, 1) if job["total"] else 0
+    return {**job, "pct": pct}
+
+
+@router.get("/batch")
+def batch_current(user: dict = Depends(current_user)):
+    """현재 실행 중인 job 조회. 없으면 null."""
+    job = get_running_job()
+    if not job:
+        return {"job": None}
+    pct = round(((job["processed"] + job["errors"]) / job["total"]) * 100, 1) if job["total"] else 0
+    return {"job": {**job, "pct": pct}}
 
 
 # ── 조회 ──────────────────────────────────────

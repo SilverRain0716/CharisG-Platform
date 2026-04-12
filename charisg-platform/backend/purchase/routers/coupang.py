@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
+from backend.purchase.services.image_downloader import mark_images_for_deletion
 from backend.purchase.services.coupang_service import register_product, get_orders
 
 router = APIRouter(prefix="/api/pa/coupang", tags=["pa-coupang"])
@@ -47,6 +48,7 @@ def upload(product_id: int, user: dict = Depends(current_user)):
                VALUES (?, 'coupang', ?, 'listed', CURRENT_TIMESTAMP)""",
             (product_id, str(result.get("data", "") if isinstance(result, dict) else "")),
         )
+    mark_images_for_deletion(product_id)
     return {"ok": True, "result": result}
 
 

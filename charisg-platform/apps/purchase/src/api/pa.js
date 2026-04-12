@@ -43,12 +43,9 @@ export const pa = {
 
   // Detail page
   generateDetail: (pid) => apiFetch(`/api/pa/detail-page/${pid}/generate`, { method: 'POST' }),
-  generateDetailBatch: (body) => fetch('/api/pa/detail-page/batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(body),
-  }),
+  startBatchJob: (body) => apiFetch('/api/pa/detail-page/batch', { method: 'POST', body }),
+  getBatchJobStatus: (jobId) => apiFetch(`/api/pa/detail-page/batch/${jobId}`),
+  getCurrentBatchJob: () => apiFetch('/api/pa/detail-page/batch'),
   getDetailPage: (pid) => apiFetch(`/api/pa/detail-page/${pid}`),
 
   // Channel listing

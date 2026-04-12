@@ -38,4 +38,6 @@ def init_db() -> None:
         (3, migrations_dir / "schema_pa_v3.sql", "sheet import: monthly_sales + category + notes"),
         (4, migrations_dir / "schema_pa_v4.sql", "products/listings_pa expand + image_cache + pricing settings seed"),
         (5, migrations_dir / "schema_pa_v5.sql", "products SEO columns + detail_pages html/market/platform"),
+        (6, migrations_dir / "schema_pa_v6.sql", "sourcing_candidates image_url column"),
+        (7, migrations_dir / "schema_pa_v7.sql", "batch_jobs for background AI processing"),
     ])

@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=860">
+<title>Charis G 상세페이지 샘플</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Noto Sans KR', sans-serif;
+    background: #f0f0f0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 40px;
+    padding: 40px 0;
+  }
+
+  .page {
+    width: 860px;
+    overflow: hidden;
+  }
+
+  /* ═══════════════════════════════════════
+     섹션 1: 정품 안내
+     ═══════════════════════════════════════ */
+  .auth-section {
+    background: linear-gradient(135deg, #1B3A5C 0%, #0F2640 100%);
+    padding: 60px 40px 50px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .auth-section::before {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 200px; height: 200px;
+    border-radius: 50%;
+    background: rgba(232, 132, 90, 0.08);
+  }
+  .auth-section::after {
+    content: '';
+    position: absolute;
+    bottom: -80px; left: -40px;
+    width: 250px; height: 250px;
+    border-radius: 50%;
+    background: rgba(232, 132, 90, 0.05);
+  }
+
+  .brand-logo-top {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 40px;
+  }
+  .brand-logo-top .icon {
+    width: 60px; height: 60px;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .brand-logo-top .icon img {
+    width: 100%; height: 100%; object-fit: contain;
+  }
+  .brand-logo-top .text {
+    font-size: 41px; font-weight: 800; color: #fff;
+    letter-spacing: 2px;
+  }
+  .brand-logo-top .sub {
+    font-size: 16px; color: rgba(255,255,255,0.5);
+    letter-spacing: 4px; margin-top: -2px;
+  }
+
+  .gold-badge {
+    width: 100px; height: 100px;
+    margin: 0 auto 30px;
+    background: linear-gradient(145deg, #F5D77A, #D4A843, #F5D77A);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 20px rgba(212, 168, 67, 0.4);
+    position: relative;
+  }
+  .gold-badge::after {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 50%;
+  }
+  .gold-badge span {
+    font-size: 20px; font-weight: 800; color: #5C3D0E;
+    text-align: center; line-height: 1.3;
+  }
+
+  .auth-title {
+    font-size: 46px; font-weight: 800; color: #fff;
+    margin-bottom: 10px;
+  }
+  .auth-title em {
+    color: #E8845A; font-style: normal;
+  }
+  .auth-subtitle {
+    font-size: 22px; color: rgba(255,255,255,0.6);
+    line-height: 1.8; margin-bottom: 10px;
+  }
+  .auth-highlight {
+    display: inline-block;
+    font-size: 20px; font-weight: 600;
+    color: #E8845A;
+    border-bottom: 1px solid rgba(232, 132, 90, 0.4);
+    padding-bottom: 2px;
+    margin-top: 5px;
+  }
+
+  /* 4가지 포인트 */
+  .points-section {
+    background: #F7F5F0;
+    padding: 50px 40px;
+    text-align: center;
+  }
+  .points-title-wrap {
+    margin-bottom: 36px;
+  }
+  .points-label {
+    font-size: 18px; color: #E8845A; font-weight: 600;
+    letter-spacing: 2px; margin-bottom: 8px;
+  }
+  .points-title {
+    font-size: 36px; font-weight: 800; color: #1B3A5C;
+  }
+  .points-title em {
+    color: #E8845A; font-style: normal;
+  }
+  .points-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    max-width: 680px;
+    margin: 0 auto;
+  }
+  .point-card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 32px 24px 28px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    transition: transform 0.2s;
+  }
+  .point-num {
+    display: inline-block;
+    width: 28px; height: 28px;
+    background: #E8845A;
+    border-radius: 50%;
+    color: #fff; font-size: 16px; font-weight: 700;
+    line-height: 28px;
+    margin-bottom: 16px;
+  }
+  .point-icon {
+    font-size: 58px;
+    margin-bottom: 14px;
+    display: block;
+  }
+  .point-title {
+    font-size: 23px; font-weight: 700; color: #1B3A5C;
+    margin-bottom: 6px;
+  }
+  .point-desc {
+    font-size: 18px; color: #888; line-height: 1.5;
+  }
+
+  /* ═══════════════════════════════════════
+     섹션 2: 해외배송 절차
+     ═══════════════════════════════════════ */
+  .shipping-section {
+    background: #E8845A;
+    padding: 50px 40px 30px;
+    text-align: center;
+  }
+  .shipping-brand {
+    display: inline-flex; align-items: center; gap: 10px;
+    margin-bottom: 20px;
+  }
+  .shipping-brand .icon {
+    width: 50px; height: 50px;
+    border-radius: 10px; overflow: hidden;
+  }
+  .shipping-brand .icon img {
+    width: 100%; height: 100%; object-fit: contain;
+  }
+  .shipping-brand .text {
+    font-size: 31px; font-weight: 800; color: #fff; letter-spacing: 1px;
+  }
+  .shipping-badge {
+    display: inline-block;
+    background: rgba(255,255,255,0.2);
+    border: 2px solid rgba(255,255,255,0.4);
+    border-radius: 30px;
+    padding: 10px 32px;
+    font-size: 26px; font-weight: 700; color: #fff;
+    margin-bottom: 16px;
+  }
+  .shipping-globe {
+    font-size: 72px; margin-bottom: 8px;
+  }
+
+  .shipping-body {
+    background: #fff;
+    border-radius: 20px;
+    padding: 40px 36px;
+    margin-top: 20px;
+  }
+  .shipping-notice {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: #F0FAF5;
+    border: 1px solid #B8E6D0;
+    border-radius: 30px;
+    padding: 10px 24px;
+    font-size: 20px; color: #2D8B5E; font-weight: 600;
+    margin-bottom: 24px;
+  }
+  .shipping-days {
+    font-size: 29px; color: #333; margin-bottom: 6px;
+  }
+  .shipping-days em {
+    font-style: normal; font-weight: 800; color: #E8845A; font-size: 34px;
+  }
+  .shipping-days-sub {
+    font-size: 17px; color: #999; margin-bottom: 36px; line-height: 1.6;
+  }
+
+  .steps-row {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 0;
+    margin-bottom: 32px;
+  }
+  .step-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 110px;
+  }
+  .step-icon-wrap {
+    width: 70px; height: 70px;
+    background: #1B3A5C;
+    border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 38px;
+    margin-bottom: 12px;
+    position: relative;
+  }
+  .step-label {
+    font-size: 17px; font-weight: 600; color: #333;
+    text-align: center; line-height: 1.4;
+  }
+  .step-arrow {
+    display: flex; align-items: center;
+    padding-top: 24px;
+    color: #1B3A5C; font-size: 24px; font-weight: 700;
+  }
+  .step-connector {
+    width: 30px; height: 3px; background: #1B3A5C;
+    margin-top: -22px;
+    border-radius: 2px;
+  }
+
+  /* ═══════════════════════════════════════
+     섹션 3: 상품 이미지 (샘플)
+     ═══════════════════════════════════════ */
+  .product-images {
+    background: #fff;
+    padding: 0;
+  }
+  .product-images img,
+  .product-images .placeholder-img {
+    width: 100%;
+    display: block;
+  }
+  .placeholder-img {
+    height: 500px;
+    background: #f5f5f5;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: #ccc; font-weight: 500;
+    border-bottom: 1px solid #eee;
+  }
+
+  /* ═══════════════════════════════════════
+     섹션 4: 구매 전 주의사항
+     ═══════════════════════════════════════ */
+  .notice-section {
+    background: #1B3A5C;
+    padding: 50px 40px 30px;
+    text-align: center;
+  }
+  .notice-brand {
+    display: inline-flex; align-items: center; gap: 10px;
+    margin-bottom: 20px;
+  }
+  .notice-brand .icon {
+    width: 50px; height: 50px;
+    border-radius: 10px; overflow: hidden;
+  }
+  .notice-brand .icon img {
+    width: 100%; height: 100%; object-fit: contain;
+  }
+  .notice-brand .text {
+    font-size: 31px; font-weight: 800; color: #fff; letter-spacing: 1px;
+  }
+  .notice-header-badge {
+    display: inline-block;
+    background: #E8845A;
+    border-radius: 30px;
+    padding: 10px 28px;
+    font-size: 20px; font-weight: 700; color: #fff;
+    margin-bottom: 8px;
+  }
+  .notice-header-title {
+    font-size: 41px; font-weight: 800; color: #fff;
+    margin-bottom: 6px;
+  }
+  .notice-header-sub {
+    font-size: 19px; color: rgba(255,255,255,0.5);
+    margin-bottom: 30px;
+  }
+
+  .notice-card {
+    background: #fff;
+    border-radius: 16px;
+    margin-bottom: 16px;
+    overflow: hidden;
+    text-align: left;
+  }
+  .notice-card-header {
+    background: #F7F5F0;
+    padding: 18px 28px;
+    font-size: 24px; font-weight: 700; color: #1B3A5C;
+    border-bottom: 2px solid #E8845A;
+  }
+  .notice-card-body {
+    padding: 24px 28px;
+  }
+  .notice-card-body li {
+    font-size: 19px; color: #555;
+    line-height: 1.8;
+    list-style: none;
+    padding-left: 16px;
+    position: relative;
+    margin-bottom: 6px;
+  }
+  .notice-card-body li::before {
+    content: '·';
+    position: absolute; left: 0;
+    font-weight: 700; color: #1B3A5C;
+  }
+  .notice-card-body .highlight {
+    color: #E8845A; font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .notice-card-body .warn {
+    color: #D94040; font-weight: 600;
+  }
+  .notice-card-body .sub-note {
+    font-size: 16px; color: #999;
+    padding-left: 16px; margin-top: 2px;
+  }
+
+  .notice-footer {
+    text-align: center;
+    padding: 30px 40px 40px;
+    background: #1B3A5C;
+  }
+  .notice-footer-text {
+    font-size: 26px; font-weight: 700; color: rgba(255,255,255,0.3);
+    letter-spacing: 4px;
+  }
+
+  /* ─── 라벨 (미리보기용) ─── */
+  .section-label {
+    background: #333;
+    color: #fff;
+    text-align: center;
+    padding: 12px;
+    font-size: 14px; font-weight: 600;
+    letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════
+     섹션 1: 정품 안내 + 4가지 포인트
+     ══════════════════════════════════════════ -->
+<div class="section-label">SECTION 1 — 정품 안내</div>
+<div class="page">
+  <div class="auth-section">
+    <div class="brand-logo-top">
+      <div>
+        <div class="text">Charis G</div>
+        <div class="sub">GLOBAL SOURCING</div>
+      </div>
+    </div>
+
+    <div class="gold-badge">
+      <span>정품<br>인증</span>
+    </div>
+
+    <div class="auth-title">본 제품은 <em>100% 정품</em>입니다.</div>
+    <p class="auth-subtitle">
+      공식 판매처의 정식 유통 제품만 취급합니다.<br>
+      OEM 제품 / 가짜 상품을 절대 판매하지 않습니다.
+    </p>
+    <span class="auth-highlight">해외에서 A/S 가능한 정품만을 판매합니다.</span>
+  </div>
+
+  <div class="points-section">
+    <div class="points-title-wrap">
+      <div class="points-label">WHY CHARIS G</div>
+      <div class="points-title">Charis G를 선택해야 하는 <em>4가지 이유</em></div>
+    </div>
+    <div class="points-grid">
+      <div class="point-card">
+        <span class="point-num">1</span>
+        <span class="point-icon">🏢</span>
+        <div class="point-title">검증된 글로벌 소싱</div>
+        <div class="point-desc">해외 공식 유통망을 통한<br>신뢰할 수 있는 제품 확보</div>
+      </div>
+      <div class="point-card">
+        <span class="point-num">2</span>
+        <span class="point-icon">💬</span>
+        <div class="point-title">빠른 고객 응대</div>
+        <div class="point-desc">늦은 시간에도<br>신속한 1:1 상담 지원</div>
+      </div>
+      <div class="point-card">
+        <span class="point-num">3</span>
+        <span class="point-icon">📦</span>
+        <div class="point-title">꼼꼼한 검수 포장</div>
+        <div class="point-desc">파손 걱정 NO<br>모든 제품 박스 포장 출고</div>
+      </div>
+      <div class="point-card">
+        <span class="point-num">4</span>
+        <span class="point-icon">🚚</span>
+        <div class="point-title">빠르고 안전한 배송</div>
+        <div class="point-desc">CJ대한통운 / 우체국택배<br>안전하고 빠른 국내 배송</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     섹션 2: 해외배송 절차
+     ══════════════════════════════════════════ -->
+<div class="section-label">SECTION 2 — 해외배송 절차</div>
+<div class="page">
+  <div class="shipping-section">
+    <div class="shipping-brand">
+      <div class="text">Charis G</div>
+    </div>
+    <br>
+    <div class="shipping-badge">해외배송 절차안내</div>
+    <div><span class="shipping-globe">🌍</span></div>
+  </div>
+
+  <div class="shipping-body" style="border-radius: 0;">
+    <div class="shipping-notice">
+      ✈️ <span>본 상품은 <b>해외배송</b> 상품입니다.</span>
+    </div>
+    <div class="shipping-days">
+      배송기간은 주문일로부터 약 <em>7~14일</em> 정도입니다.
+    </div>
+    <div class="shipping-days-sub">
+      (평일 영업일 기준이며 현지 사정 및 공휴일에 따라<br>
+      배송 기간에 차이가 있을 수 있습니다)
+    </div>
+
+    <!-- 상단 4단계 -->
+    <div class="steps-row">
+      <div class="step-item">
+        <div class="step-icon-wrap">📋</div>
+        <div class="step-label">주문 및<br>결제확인</div>
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step-item">
+        <div class="step-icon-wrap">🛒</div>
+        <div class="step-label">현지 재고<br>확인 및 구매</div>
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step-item">
+        <div class="step-icon-wrap">🔍</div>
+        <div class="step-label">물류센터<br>입고 후 검품</div>
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step-item">
+        <div class="step-icon-wrap">✈️</div>
+        <div class="step-label">국제 배송</div>
+      </div>
+    </div>
+
+    <!-- 하단 3단계 -->
+    <div class="steps-row" style="margin-bottom: 10px;">
+      <div class="step-item">
+        <div class="step-icon-wrap" style="background: #2D8B5E;">🛃</div>
+        <div class="step-label">국내 도착<br>세관/통관</div>
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step-item">
+        <div class="step-icon-wrap" style="background: #2D8B5E;">🚛</div>
+        <div class="step-label">통관완료 후<br>국내 배송</div>
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step-item">
+        <div class="step-icon-wrap" style="background: #2D8B5E;">📬</div>
+        <div class="step-label">배송 완료</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     섹션 3: 상품 이미지 (샘플 플레이스홀더)
+     ══════════════════════════════════════════ -->
+<div class="section-label">SECTION 3 — 상품 이미지 (Amazon 다운로드)</div>
+<div class="page">
+  <div class="product-images">
+    <div class="placeholder-img">상품 이미지 1 (Amazon 다운로드)</div>
+    <div class="placeholder-img">상품 이미지 2</div>
+    <div class="placeholder-img">상품 이미지 3</div>
+    <div class="placeholder-img" style="height: 200px;">... (최대 10장)</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     섹션 4: 구매 전 주의사항
+     ══════════════════════════════════════════ -->
+<div class="section-label">SECTION 4 — 구매 전 주의사항</div>
+<div class="page">
+  <div class="notice-section">
+    <div class="notice-brand">
+      <div class="text">Charis G</div>
+    </div>
+    <br>
+    <div class="notice-header-badge">해외 구매대행 상품</div>
+    <div class="notice-header-title">구매 전 필독 사항</div>
+    <div class="notice-header-sub">주문 하시기 전에 꼭 필독해주세요!</div>
+  </div>
+
+  <div style="background: #15304D; padding: 0 40px 16px;">
+    <div class="notice-card">
+      <div class="notice-card-header">관부가세 안내</div>
+      <div class="notice-card-body">
+        <ul>
+          <li>관부가세 포함으로 표기된 상품 이외에는 <span class="highlight">관부가세 미포함</span> 상품입니다.</li>
+          <li>구매금액이 미화 <span class="warn">150달러를 초과</span>할 경우 별도로 관부가세가 발생합니다.</li>
+          <li>관부가세 미납으로 인한 통관지연 / 폐기처분은 당사에서 책임지지 않습니다.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="notice-card">
+      <div class="notice-card-header">주문 관련 안내</div>
+      <div class="notice-card-body">
+        <ul>
+          <li>판매 중인 상품은 <span class="highlight">재고를 보유하지 않으며</span> 고객님의 주문이 확인 되면 공식 판매업체에 발주를 넣고 구매하여 발송해 드리고 있습니다.</li>
+          <li>해외 현지 발주 후 단순 변심으로 인한 주문 변경 / 취소, 반품 요청 시 <span class="warn">별도 반품 수수료가 발생</span>하게 되므로, 신중히 결정 후 구매부탁드리겠습니다.</li>
+          <li>수령인의 주문 정보를 입력하실 때 개인통관고유부호 발급 시 기재했던 정보<br>
+            <span class="warn">수령인 성함 + 수령인 연락처 + 수령인 개인통관고유부호</span><br>
+            위에 말씀드린 3개의 정보를 반드시 일치시켜 주세요.</li>
+        </ul>
+        <div class="sub-note">*3가지 중 하나라도 맞지 않는다면 통관이 되지 않습니다.</div>
+        <div class="sub-note">*개인통관고유부호 발급 당시의 성함과 연락처 등의 정보가 바뀐 경우는 변경 & 재발급을 부탁드립니다.</div>
+      </div>
+    </div>
+
+    <div class="notice-card">
+      <div class="notice-card-header">반품 / 교환 안내</div>
+      <div class="notice-card-body">
+        <ul>
+          <li>상품 수령 후 상품에 불량을 발견했을 경우<br>
+            불량인 부분의 <span class="highlight">사진과 함께 1:1 문의</span>를 남겨주시기 바랍니다.</li>
+        </ul>
+        <br>
+        <div style="font-size: 20px; font-weight: 700; color: #1B3A5C; margin-bottom: 8px;">반품 / 교환 불가 사유</div>
+        <ul>
+          <li>상품, 상품의 구성품, 상품의 본 박스, 밀봉, 태그, 라벨 등의 훼손</li>
+          <li>전압에 맞지 않는 변압기 사용으로 인한 내부 고장 등은 반품 불가입니다.</li>
+        </ul>
+        <br>
+        <div style="font-size: 20px; font-weight: 700; color: #1B3A5C; margin-bottom: 8px;">반품 / 교환을 원하시는 경우</div>
+        <ul>
+          <li>상품 수령 후 <span class="warn">7일 이내</span> 상품과 구성품, 태그, 상품 박스 등의 상품 가치를 훼손하지 않은 수령했던 원상태 그대로 보내주셔야 하며,<br>
+            <span class="warn">현지 왕복배송비 + 국내 왕복배송비 + 수입세금 및 제비용이 청구</span>됩니다.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="notice-card">
+      <div class="notice-card-header">A/S 안내 및 기타사항</div>
+      <div class="notice-card-body">
+        <ul>
+          <li>해외 구매대행의 상품 특성상 <span class="warn">한국 내 A/S는 불가</span>합니다.</li>
+          <li>무게 및 부피가 큰 제품은 임의로 화물 택배사로 인계되어 배송될 수 있으며, 구매 시 결제하신 금액과는 <span class="highlight">별도의 착불 운임</span>이 발생할 수 있습니다.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="notice-footer">
+    <div class="notice-footer-text">Charis G</div>
+  </div>
+</div>
+
+</body>
+</html>

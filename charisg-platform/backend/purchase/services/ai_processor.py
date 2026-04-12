@@ -1,52 +1,192 @@
 """PA 전용 AI 처리 파이프라인 — 번역 + SEO + 카테고리 + 상세페이지 HTML 생성."""
+import asyncio
 import json
 import logging
+import uuid
+from datetime import datetime, timezone
 
 from backend.purchase.database import get_db
-from backend.purchase.services.exchange_rate_service import get_current_rate
+from backend.purchase.services.image_downloader import download_product_images
 from backend_shared.ai import translate_text, generate_seo, map_category
-from backend_shared.detail_page_service import SECTION_HTML, _build_html
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SECTIONS = [
-    {"id": "header", "enabled": True},
-    {"id": "gallery", "enabled": True},
-    {"id": "specs", "enabled": True},
-    {"id": "features", "enabled": True},
-    {"id": "customs", "enabled": True},
-    {"id": "policy", "enabled": True},
-    {"id": "faq", "enabled": True},
-    {"id": "cs", "enabled": True},
-    {"id": "footer", "enabled": True},
-]
+# ── PA 전용 상세페이지 섹션 (인라인 스타일) ─────────────
+
+PA_SECTION_AUTH = """<div style="background:linear-gradient(135deg,#1B3A5C 0%,#0F2640 100%);padding:60px 40px 50px;text-align:center">
+  <div style="margin-bottom:40px">
+    <div style="font-size:41px;font-weight:800;color:#fff;letter-spacing:2px">Charis G</div>
+    <div style="font-size:16px;color:rgba(255,255,255,0.5);letter-spacing:4px;margin-top:-2px">GLOBAL SOURCING</div>
+  </div>
+  <div style="width:100px;height:100px;margin:0 auto 30px;background:linear-gradient(145deg,#F5D77A,#D4A843,#F5D77A);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 20px rgba(212,168,67,0.4)">
+    <span style="font-size:20px;font-weight:800;color:#5C3D0E;text-align:center;line-height:1.3">정품<br>인증</span>
+  </div>
+  <div style="font-size:46px;font-weight:800;color:#fff;margin-bottom:10px">본 제품은 <span style="color:#E8845A">100% 정품</span>입니다.</div>
+  <p style="font-size:22px;color:rgba(255,255,255,0.6);line-height:1.8;margin-bottom:10px">공식 판매처의 정식 유통 제품만 취급합니다.<br>OEM 제품 / 가짜 상품을 절대 판매하지 않습니다.</p>
+  <span style="display:inline-block;font-size:20px;font-weight:600;color:#E8845A;border-bottom:1px solid rgba(232,132,90,0.4);padding-bottom:2px">해외에서 A/S 가능한 정품만을 판매합니다.</span>
+</div>
+<div style="background:#F7F5F0;padding:50px 40px;text-align:center">
+  <div style="margin-bottom:36px">
+    <div style="font-size:18px;color:#E8845A;font-weight:600;letter-spacing:2px;margin-bottom:8px">WHY CHARIS G</div>
+    <div style="font-size:36px;font-weight:800;color:#1B3A5C">Charis G를 선택해야 하는 <span style="color:#E8845A">4가지 이유</span></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:680px;margin:0 auto">
+    <div style="background:#fff;border-radius:16px;padding:32px 24px 28px;box-shadow:0 2px 12px rgba(0,0,0,0.06)">
+      <span style="display:inline-block;width:28px;height:28px;background:#E8845A;border-radius:50%;color:#fff;font-size:16px;font-weight:700;line-height:28px;margin-bottom:16px">1</span>
+      <span style="font-size:58px;margin-bottom:14px;display:block">🏢</span>
+      <div style="font-size:23px;font-weight:700;color:#1B3A5C;margin-bottom:6px">검증된 글로벌 소싱</div>
+      <div style="font-size:18px;color:#888;line-height:1.5">해외 공식 유통망을 통한<br>신뢰할 수 있는 제품 확보</div>
+    </div>
+    <div style="background:#fff;border-radius:16px;padding:32px 24px 28px;box-shadow:0 2px 12px rgba(0,0,0,0.06)">
+      <span style="display:inline-block;width:28px;height:28px;background:#E8845A;border-radius:50%;color:#fff;font-size:16px;font-weight:700;line-height:28px;margin-bottom:16px">2</span>
+      <span style="font-size:58px;margin-bottom:14px;display:block">💬</span>
+      <div style="font-size:23px;font-weight:700;color:#1B3A5C;margin-bottom:6px">빠른 고객 응대</div>
+      <div style="font-size:18px;color:#888;line-height:1.5">늦은 시간에도<br>신속한 1:1 상담 지원</div>
+    </div>
+    <div style="background:#fff;border-radius:16px;padding:32px 24px 28px;box-shadow:0 2px 12px rgba(0,0,0,0.06)">
+      <span style="display:inline-block;width:28px;height:28px;background:#E8845A;border-radius:50%;color:#fff;font-size:16px;font-weight:700;line-height:28px;margin-bottom:16px">3</span>
+      <span style="font-size:58px;margin-bottom:14px;display:block">📦</span>
+      <div style="font-size:23px;font-weight:700;color:#1B3A5C;margin-bottom:6px">꼼꼼한 검수 포장</div>
+      <div style="font-size:18px;color:#888;line-height:1.5">파손 걱정 NO<br>모든 제품 박스 포장 출고</div>
+    </div>
+    <div style="background:#fff;border-radius:16px;padding:32px 24px 28px;box-shadow:0 2px 12px rgba(0,0,0,0.06)">
+      <span style="display:inline-block;width:28px;height:28px;background:#E8845A;border-radius:50%;color:#fff;font-size:16px;font-weight:700;line-height:28px;margin-bottom:16px">4</span>
+      <span style="font-size:58px;margin-bottom:14px;display:block">🚚</span>
+      <div style="font-size:23px;font-weight:700;color:#1B3A5C;margin-bottom:6px">빠르고 안전한 배송</div>
+      <div style="font-size:18px;color:#888;line-height:1.5">CJ대한통운 / 우체국택배<br>안전하고 빠른 국내 배송</div>
+    </div>
+  </div>
+</div>"""
+
+PA_SECTION_SHIPPING = """<div style="background:#E8845A;padding:50px 40px 30px;text-align:center">
+  <div style="font-size:31px;font-weight:800;color:#fff;letter-spacing:1px;margin-bottom:20px">Charis G</div>
+  <div style="display:inline-block;background:rgba(255,255,255,0.2);border:2px solid rgba(255,255,255,0.4);border-radius:30px;padding:10px 32px;font-size:26px;font-weight:700;color:#fff;margin-bottom:16px">해외배송 절차안내</div>
+  <div style="font-size:72px;margin-bottom:8px">🌍</div>
+</div>
+<div style="background:#fff;padding:40px 36px;text-align:center">
+  <div style="display:inline-flex;align-items:center;gap:8px;background:#F0FAF5;border:1px solid #B8E6D0;border-radius:30px;padding:10px 24px;font-size:20px;color:#2D8B5E;font-weight:600;margin-bottom:24px">
+    ✈️ <span>본 상품은 <b>해외배송</b> 상품입니다.</span>
+  </div>
+  <div style="font-size:29px;color:#333;margin-bottom:6px">배송기간은 주문일로부터 약 <span style="font-weight:800;color:#E8845A;font-size:34px">7~14일</span> 정도입니다.</div>
+  <div style="font-size:17px;color:#999;margin-bottom:36px;line-height:1.6">(평일 영업일 기준이며 현지 사정 및 공휴일에 따라<br>배송 기간에 차이가 있을 수 있습니다)</div>
+  <div style="display:flex;justify-content:center;align-items:flex-start;margin-bottom:32px">
+    <div style="display:flex;flex-direction:column;align-items:center;width:110px">
+      <div style="width:70px;height:70px;background:#1B3A5C;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:38px;margin-bottom:12px">📋</div>
+      <div style="font-size:17px;font-weight:600;color:#333;text-align:center;line-height:1.4">주문 및<br>결제확인</div>
+    </div>
+    <div style="display:flex;align-items:center;padding-top:24px;color:#1B3A5C;font-size:24px;font-weight:700">→</div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:110px">
+      <div style="width:70px;height:70px;background:#1B3A5C;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:38px;margin-bottom:12px">🛒</div>
+      <div style="font-size:17px;font-weight:600;color:#333;text-align:center;line-height:1.4">현지 재고<br>확인 및 구매</div>
+    </div>
+    <div style="display:flex;align-items:center;padding-top:24px;color:#1B3A5C;font-size:24px;font-weight:700">→</div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:110px">
+      <div style="width:70px;height:70px;background:#1B3A5C;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:38px;margin-bottom:12px">🔍</div>
+      <div style="font-size:17px;font-weight:600;color:#333;text-align:center;line-height:1.4">물류센터<br>입고 후 검품</div>
+    </div>
+    <div style="display:flex;align-items:center;padding-top:24px;color:#1B3A5C;font-size:24px;font-weight:700">→</div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:110px">
+      <div style="width:70px;height:70px;background:#1B3A5C;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:38px;margin-bottom:12px">✈️</div>
+      <div style="font-size:17px;font-weight:600;color:#333;text-align:center;line-height:1.4">국제 배송</div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:center;align-items:flex-start;margin-bottom:10px">
+    <div style="display:flex;flex-direction:column;align-items:center;width:110px">
+      <div style="width:70px;height:70px;background:#2D8B5E;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:38px;margin-bottom:12px">🛃</div>
+      <div style="font-size:17px;font-weight:600;color:#333;text-align:center;line-height:1.4">국내 도착<br>세관/통관</div>
+    </div>
+    <div style="display:flex;align-items:center;padding-top:24px;color:#1B3A5C;font-size:24px;font-weight:700">→</div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:110px">
+      <div style="width:70px;height:70px;background:#2D8B5E;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:38px;margin-bottom:12px">🚛</div>
+      <div style="font-size:17px;font-weight:600;color:#333;text-align:center;line-height:1.4">통관완료 후<br>국내 배송</div>
+    </div>
+    <div style="display:flex;align-items:center;padding-top:24px;color:#1B3A5C;font-size:24px;font-weight:700">→</div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:110px">
+      <div style="width:70px;height:70px;background:#2D8B5E;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:38px;margin-bottom:12px">📬</div>
+      <div style="font-size:17px;font-weight:600;color:#333;text-align:center;line-height:1.4">배송 완료</div>
+    </div>
+  </div>
+</div>"""
+
+# 상품 이미지 — {{product_images}} 가 <img> 태그 나열로 치환됨
+PA_SECTION_GALLERY = """<div style="background:#fff">{{product_images}}</div>"""
+
+PA_SECTION_NOTICE = """<div style="background:#1B3A5C;padding:50px 40px 30px;text-align:center">
+  <div style="font-size:31px;font-weight:800;color:#fff;letter-spacing:1px;margin-bottom:20px">Charis G</div>
+  <div style="display:inline-block;background:#E8845A;border-radius:30px;padding:10px 28px;font-size:20px;font-weight:700;color:#fff;margin-bottom:8px">해외 구매대행 상품</div>
+  <div style="font-size:41px;font-weight:800;color:#fff;margin-bottom:6px">구매 전 필독 사항</div>
+  <div style="font-size:19px;color:rgba(255,255,255,0.5);margin-bottom:30px">주문 하시기 전에 꼭 필독해주세요!</div>
+</div>
+<div style="background:#15304D;padding:0 40px 16px">
+  <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">관부가세 안내</div>
+    <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
+      · 관부가세 포함으로 표기된 상품 이외에는 <span style="color:#E8845A;font-weight:600;text-decoration:underline;text-underline-offset:3px">관부가세 미포함</span> 상품입니다.<br>
+      · 구매금액이 미화 <span style="color:#D94040;font-weight:600">150달러를 초과</span>할 경우 별도로 관부가세가 발생합니다.<br>
+      · 관부가세 미납으로 인한 통관지연 / 폐기처분은 당사에서 책임지지 않습니다.
+    </div>
+  </div>
+  <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">주문 관련 안내</div>
+    <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
+      · 판매 중인 상품은 <span style="color:#E8845A;font-weight:600;text-decoration:underline;text-underline-offset:3px">재고를 보유하지 않으며</span> 고객님의 주문이 확인 되면 공식 판매업체에 발주를 넣고 구매하여 발송해 드리고 있습니다.<br>
+      · 해외 현지 발주 후 단순 변심으로 인한 주문 변경 / 취소, 반품 요청 시 <span style="color:#D94040;font-weight:600">별도 반품 수수료가 발생</span>하게 되므로, 신중히 결정 후 구매부탁드리겠습니다.<br>
+      · 수령인의 주문 정보를 입력하실 때 개인통관고유부호 발급 시 기재했던 정보<br>
+      <span style="color:#D94040;font-weight:600">수령인 성함 + 수령인 연락처 + 수령인 개인통관고유부호</span><br>
+      위에 말씀드린 3개의 정보를 반드시 일치시켜 주세요.<br>
+      <span style="font-size:16px;color:#999">*3가지 중 하나라도 맞지 않는다면 통관이 되지 않습니다.</span><br>
+      <span style="font-size:16px;color:#999">*개인통관고유부호 발급 당시의 성함과 연락처 등의 정보가 바뀐 경우는 변경 &amp; 재발급을 부탁드립니다.</span>
+    </div>
+  </div>
+  <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">반품 / 교환 안내</div>
+    <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
+      · 상품 수령 후 상품에 불량을 발견했을 경우 불량인 부분의 <span style="color:#E8845A;font-weight:600;text-decoration:underline;text-underline-offset:3px">사진과 함께 1:1 문의</span>를 남겨주시기 바랍니다.<br><br>
+      <span style="font-size:20px;font-weight:700;color:#1B3A5C">반품 / 교환 불가 사유</span><br>
+      · 상품, 상품의 구성품, 상품의 본 박스, 밀봉, 태그, 라벨 등의 훼손<br>
+      · 전압에 맞지 않는 변압기 사용으로 인한 내부 고장 등은 반품 불가입니다.<br><br>
+      <span style="font-size:20px;font-weight:700;color:#1B3A5C">반품 / 교환을 원하시는 경우</span><br>
+      · 상품 수령 후 <span style="color:#D94040;font-weight:600">7일 이내</span> 상품과 구성품, 태그, 상품 박스 등의 상품 가치를 훼손하지 않은 수령했던 원상태 그대로 보내주셔야 하며,<br>
+      <span style="color:#D94040;font-weight:600">현지 왕복배송비 + 국내 왕복배송비 + 수입세금 및 제비용이 청구</span>됩니다.
+    </div>
+  </div>
+  <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">A/S 안내 및 기타사항</div>
+    <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
+      · 해외 구매대행의 상품 특성상 <span style="color:#D94040;font-weight:600">한국 내 A/S는 불가</span>합니다.<br>
+      · 무게 및 부피가 큰 제품은 임의로 화물 택배사로 인계되어 배송될 수 있으며, 구매 시 결제하신 금액과는 <span style="color:#E8845A;font-weight:600;text-decoration:underline;text-underline-offset:3px">별도의 착불 운임</span>이 발생할 수 있습니다.
+    </div>
+  </div>
+</div>
+<div style="text-align:center;padding:30px 40px 40px;background:#1B3A5C">
+  <div style="font-size:26px;font-weight:700;color:rgba(255,255,255,0.3);letter-spacing:4px">Charis G</div>
+</div>"""
+
+PA_SECTIONS = ["auth", "shipping", "gallery", "notice"]
 
 
-def _adapt_pa_to_detail_page(row: dict, title_ko: str, description_ko: str | None) -> dict:
-    """PA products row → _build_html 이 내부에서 _extract_variables 로 처리할 dict 변환."""
-    sale_price = row.get("sale_price_krw")
-    if sale_price is None or sale_price == "":
-        cost_usd = row.get("cost_usd")
-        if cost_usd is not None and cost_usd != "":
-            sale_price = int(float(cost_usd) * get_current_rate())
-        else:
-            sale_price = None
+def _build_pa_html(image_urls: list[str]) -> str:
+    """PA 전용 상세페이지 HTML 조립. 순서: 정품→배송→상품이미지→주의사항."""
+    # 상품 이미지 태그 생성
+    if image_urls:
+        img_tags = "\n".join(
+            f'<img src="{url}" style="width:100%;display:block" alt="상품 이미지">'
+            for url in image_urls
+        )
+    else:
+        img_tags = '<div style="padding:40px;text-align:center;color:#999;font-size:18px">상품 이미지 없음</div>'
 
-    return {
-        "id": row["id"],
-        "product_name_kr": title_ko,
-        "product_name_processed": title_ko,
-        "product_name": row.get("title_en") or "",
-        "description_kr": description_ko or "",
-        "description": row.get("description_en") or "",
-        "image_url": "",
-        "images_processed": "[]",
-        "specs": row.get("specs_json") or "{}",
-        "calculated_price": sale_price,
-        "source_price": row.get("cost_usd"),
-        "category_mapped": row.get("category_path") or "",
-        "brand": row.get("brand") or "",
-    }
+    gallery = PA_SECTION_GALLERY.replace("{{product_images}}", img_tags)
+
+    parts = [
+        '<div style="max-width:860px;margin:0 auto;font-family:\'Noto Sans KR\',sans-serif">',
+        PA_SECTION_AUTH,
+        PA_SECTION_SHIPPING,
+        gallery,
+        PA_SECTION_NOTICE,
+        "</div>",
+    ]
+    return "\n".join(parts)
 
 
 def _save_detail_page_pa(product_id: int, html: str, sections_json: str,
@@ -87,6 +227,10 @@ async def process_product(product_id: int, platform: str = "smartstore") -> dict
     if not title_en:
         raise ValueError(f"product {product_id}: title_en 없음 — 번역 불가")
 
+    # 0. 이미지 다운로드 (Amazon → 로컬)
+    images_json = row.get("images_json") or "[]"
+    img_result = await download_product_images(product_id, images_json)
+
     # 1. 번역
     tr_title = await translate_text(title_en, "en", "ko")
     title_ko = tr_title["translated"]
@@ -117,10 +261,9 @@ async def process_product(product_id: int, platform: str = "smartstore") -> dict
     )
     mapped_category = cat_result.get("mapped_category") or row.get("category_path") or ""
 
-    # 4. 어댑터 → HTML 생성
-    adapted = _adapt_pa_to_detail_page(row, title_ko, description_ko)
-    adapted["category_mapped"] = mapped_category
-    html = _build_html(adapted, DEFAULT_SECTIONS, "KR")
+    # 4. HTML 생성 (PA 전용 템플릿)
+    image_urls = img_result.get("local_urls") or []
+    html = _build_pa_html(image_urls)
 
     # 5. products 테이블 업데이트
     with get_db() as conn:
@@ -134,7 +277,7 @@ async def process_product(product_id: int, platform: str = "smartstore") -> dict
         )
 
     # 6. detail_pages 저장
-    sections_json = json.dumps([s["id"] for s in DEFAULT_SECTIONS if s["enabled"]])
+    sections_json = json.dumps(PA_SECTIONS)
     detail_page_id = _save_detail_page_pa(product_id, html, sections_json, "KR", platform)
 
     return {
@@ -184,3 +327,76 @@ async def process_batch(product_ids: list[int], platform: str = "smartstore"):
         "errors": errors,
         "total": total,
     }
+
+
+# ── 백그라운드 큐 방식 ──────────────────────────
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def create_batch_job(product_ids: list[int], platform: str = "smartstore") -> str:
+    """batch_jobs 레코드 생성, job_id 반환."""
+    job_id = uuid.uuid4().hex[:12]
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO batch_jobs (id, job_type, status, total, created_at)
+               VALUES (?, 'ai_detail', 'pending', ?, ?)""",
+            (job_id, len(product_ids), _now_iso()),
+        )
+    return job_id
+
+
+def get_batch_job(job_id: str) -> dict | None:
+    """batch_jobs 상태 조회."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM batch_jobs WHERE id=?", (job_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_running_job() -> dict | None:
+    """현재 실행 중인 job 조회 (running 또는 pending)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM batch_jobs WHERE status IN ('pending','running') ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    return dict(row) if row else None
+
+
+async def run_batch_background(job_id: str, product_ids: list[int], platform: str = "smartstore"):
+    """백그라운드 asyncio task로 실행. 진행률을 batch_jobs 테이블에 기록."""
+    total = len(product_ids)
+    processed = 0
+    errors = 0
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE batch_jobs SET status='running', started_at=? WHERE id=?",
+            (_now_iso(), job_id),
+        )
+
+    for i, pid in enumerate(product_ids, 1):
+        try:
+            await process_product(pid, platform)
+            processed += 1
+        except Exception as e:
+            errors += 1
+            logger.warning(f"[batch-job {job_id}] product {pid} 실패: {e}")
+
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE batch_jobs
+                   SET processed=?, errors=?, current_product_id=?
+                   WHERE id=?""",
+                (processed, errors, pid, job_id),
+            )
+
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE batch_jobs
+               SET status='done', processed=?, errors=?, finished_at=?,
+                   current_product_id=NULL
+               WHERE id=?""",
+            (processed, errors, _now_iso(), job_id),
+        )
+    logger.info(f"[batch-job {job_id}] 완료 — 성공 {processed}, 실패 {errors}/{total}")

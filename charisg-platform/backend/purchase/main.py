@@ -6,10 +6,12 @@ PA API entrypoint — port 8002.
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 ROOT = os.environ.get("CHARISG_ROOT", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 load_dotenv(os.path.join(ROOT, ".env"))
@@ -55,6 +57,11 @@ for r in (summary, dashboard, datalab, discovery, searchad, keywords, sourcing, 
           customs, competition, pa_products, detail_page, smartstore, coupang,
           orders, tracking, cs, returns, pa_monitor, pa_settings, exchange_rate, pricing):
     app.include_router(r.router)
+
+# 이미지 정적 파일 서빙 — /api/pa/images/products/{id}/img_000.jpg
+_media_dir = Path(__file__).resolve().parent / "media"
+_media_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/api/pa/images", StaticFiles(directory=str(_media_dir)), name="pa-images")
 
 
 @app.get("/api/pa/health")

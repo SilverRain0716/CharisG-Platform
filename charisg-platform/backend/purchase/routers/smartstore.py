@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
+from backend.purchase.services.image_downloader import mark_images_for_deletion
 from backend.purchase.services.smartstore_lister import list_product, build_payload
 
 router = APIRouter(prefix="/api/pa/smartstore", tags=["pa-smartstore"])
@@ -22,7 +23,9 @@ def list_listings(user: dict = Depends(current_user)):
 
 @router.post("/upload/{product_id}")
 def upload(product_id: int, user: dict = Depends(current_user)):
-    return list_product(product_id)
+    result = list_product(product_id)
+    mark_images_for_deletion(product_id)
+    return result
 
 
 @router.get("/preview/{product_id}")

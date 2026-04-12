@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 
 from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
+from backend.purchase.services.image_downloader import cleanup_expired_images
 from backend.purchase.services.stock_monitor_service import run_monitor
 from backend.purchase.services.price_monitor import get_margin_alerts
 
@@ -28,6 +29,12 @@ def run_stock_monitor(user: dict = Depends(current_user)):
 @router.get("/margin")
 def margin_alerts(user: dict = Depends(current_user)):
     return get_margin_alerts()
+
+
+@router.post("/image-cleanup")
+def image_cleanup(user: dict = Depends(current_user)):
+    """만료된 이미지 정리 (cron 또는 수동 호출)."""
+    return cleanup_expired_images()
 
 
 @router.get("/price-history/{product_id}")
