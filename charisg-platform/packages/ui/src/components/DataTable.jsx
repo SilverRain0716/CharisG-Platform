@@ -5,7 +5,9 @@ import { cx } from '../utils/cx.js';
  * DataTable — 30~100건 배치 검토용 데이터 테이블.
  *
  * Props:
- *   columns:    [{ key, label, render?, sortable?, width? }]
+ *   columns:    [{ key, label, render?, sortable?, width?, wrap?, maxWidth? }]
+ *     wrap:     true 면 해당 셀만 줄바꿈 허용 (기본 nowrap)
+ *     maxWidth: 인라인 style.maxWidth (예: '320px') — wrap 과 함께 써서 상한 지정
  *   rows:       any[]
  *   rowKey:     (row) => string
  *   selectable: boolean
@@ -75,7 +77,7 @@ export function DataTable({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-ink-200 bg-white">
+    <div className="overflow-hidden rounded-lg border border-ink-200 bg-white min-w-0">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-ink-200 text-sm">
           <thead className="bg-ink-50">
@@ -131,7 +133,14 @@ export function DataTable({
                     </td>
                   )}
                   {columns.map((c) => (
-                    <td key={c.key} className="whitespace-nowrap px-3 py-2 text-ink-700">
+                    <td
+                      key={c.key}
+                      className={cx(
+                        'px-3 py-2 align-top text-ink-700',
+                        c.wrap ? 'whitespace-normal break-words' : 'whitespace-nowrap',
+                      )}
+                      style={c.maxWidth ? { maxWidth: c.maxWidth } : undefined}
+                    >
                       {c.render ? c.render(row[c.key], row) : row[c.key]}
                     </td>
                   ))}

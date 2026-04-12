@@ -16,9 +16,9 @@ load_dotenv(os.path.join(ROOT, ".env"))
 
 from backend.purchase import database
 from backend.purchase.routers import (
-    summary, dashboard, datalab, searchad, keywords, sourcing, margin,
+    summary, dashboard, datalab, discovery, searchad, keywords, sourcing, margin,
     customs, competition, pa_products, detail_page, smartstore, coupang,
-    orders, tracking, cs, returns, pa_monitor, pa_settings,
+    orders, tracking, cs, returns, pa_monitor, pa_settings, exchange_rate, pricing,
 )
 from backend_shared.context import register_db_factory
 
@@ -50,10 +50,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 19 routers
-for r in (summary, dashboard, datalab, searchad, keywords, sourcing, margin,
+# 22 routers
+for r in (summary, dashboard, datalab, discovery, searchad, keywords, sourcing, margin,
           customs, competition, pa_products, detail_page, smartstore, coupang,
-          orders, tracking, cs, returns, pa_monitor, pa_settings):
+          orders, tracking, cs, returns, pa_monitor, pa_settings, exchange_rate, pricing):
     app.include_router(r.router)
 
 

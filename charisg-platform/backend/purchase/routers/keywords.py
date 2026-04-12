@@ -38,8 +38,15 @@ def list_keywords(
         total = conn.execute(
             f"SELECT COUNT(*) c FROM keywords {where_sql}", tuple(params),
         ).fetchone()["c"]
+        unclustered = conn.execute(
+            "SELECT COUNT(*) c FROM keywords WHERE cluster_id IS NULL"
+        ).fetchone()["c"]
 
-    return {"items": [dict(r) for r in rows], "total": total}
+    return {
+        "items": [dict(r) for r in rows],
+        "total": total,
+        "unclustered": unclustered,
+    }
 
 
 @router.get("/clusters")

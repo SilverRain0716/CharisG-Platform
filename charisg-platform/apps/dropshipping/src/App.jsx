@@ -1,5 +1,5 @@
-import React from 'react';
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { GlobalTopBar, Sidebar } from '@charisg/ui';
 import { apiFetch, useAuth } from '@charisg/auth';
@@ -29,6 +29,7 @@ const NAV = [
 export default function App() {
   const { user, loading, logout } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const { data: summary } = useQuery({
     queryKey: ['hub', 'summary'],
@@ -36,10 +37,14 @@ export default function App() {
     enabled: !!user,
   });
 
-  if (loading) return <div className="flex h-screen items-center justify-center text-ink-500">로딩 중...</div>;
-  if (!user) {
-    window.location.href = '/login?next=' + encodeURIComponent('/dropshipping/');
-    return null;
+  useEffect(() => {
+    if (!loading && !user) {
+      window.location.replace('/login?next=' + encodeURIComponent('/dropshipping/'));
+    }
+  }, [loading, user]);
+
+  if (loading || !user) {
+    return <div className="flex h-screen items-center justify-center text-ink-500">로딩 중...</div>;
   }
 
   const items = NAV.map((n) => ({
@@ -62,8 +67,7 @@ export default function App() {
           items={items}
           onSelect={(id) => {
             const item = items.find((i) => i.id === id);
-            if (item) window.history.pushState({}, '', '/dropshipping' + item.href);
-            window.dispatchEvent(new PopStateEvent('popstate'));
+            if (item) navigate(item.href);
           }}
         />
         <main className="flex-1 px-6 py-8">

@@ -147,11 +147,15 @@ def main(monolith_path: str) -> int:
             pa.commit()
             log.info(f"  collected_products(purchase_agent) → sourcing_candidates: {len(rows)} rows")
 
+    # cs_tickets / orders: 모노리스 컬럼 구조가 PA 와 다름 (channel/current_step 등 NOT NULL).
+    # 모노리스에 데이터가 거의 없고 (각 2건) 의미가 다르므로 skip.
+    # 향후 PA 운영 시작 후 새로 적재.
     if "cs_tickets" in src_tables:
-        # 모노리스 cs_tickets → PA cs_tickets (컬럼 매핑 다르면 교집합만)
-        copy_table_filtered(src, pa, "cs_tickets", "cs_tickets")
+        n = src.execute("SELECT COUNT(*) FROM cs_tickets").fetchone()[0]
+        log.info(f"  cs_tickets ({n} rows): skip (모노리스/PA 컬럼 구조 비호환)")
     if "orders" in src_tables:
-        copy_table_filtered(src, pa, "orders", "orders")
+        n = src.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+        log.info(f"  orders ({n} rows): skip (모노리스/PA 컬럼 구조 비호환)")
 
     src.close()
     hub.close()

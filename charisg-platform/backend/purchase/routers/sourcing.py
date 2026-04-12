@@ -1,4 +1,4 @@
-"""PA Sourcing — 후보 리스트, GO/NO-GO 판단, 일괄 처리."""
+"""PA Sourcing — 시트 import, 후보 리스트, 선택 삭제, 상품관리 이관."""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
+from backend.purchase.services.sheet_importer import import_from_sheet_url
+from backend.purchase.services.sourcing_promote import promote_all
 
 router = APIRouter(prefix="/api/pa/sourcing", tags=["pa-sourcing"])
 
@@ -15,11 +17,11 @@ def list_candidates(
     user: dict = Depends(current_user),
     status: Optional[str] = None,
     shipping: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 200,
     offset: int = 0,
 ):
     where = []
-    params = []
+    params: list = []
     if status:
         where.append("sourcing_status=?")
         params.append(status)
@@ -30,8 +32,9 @@ def list_candidates(
     with get_db() as conn:
         rows = conn.execute(
             f"""SELECT id, keyword_id, asin, title, amazon_url, image_url, price_usd,
-                       rating, review_count, in_stock, cj_filter_pass,
-                       shipping_status, sourcing_status, collected_at
+                       rating, review_count, monthly_sales, category, notes,
+                       in_stock, cj_filter_pass, shipping_status, sourcing_status,
+                       collected_at
                 FROM sourcing_candidates {where_sql}
                 ORDER BY collected_at DESC LIMIT ? OFFSET ?""",
             (*params, limit, offset),
@@ -42,37 +45,40 @@ def list_candidates(
     return {"items": [dict(r) for r in rows], "total": total}
 
 
-class GoNogoBody(BaseModel):
-    decision: str   # 'go' | 'nogo'
-    reason: Optional[str] = None
+class ImportSheetBody(BaseModel):
+    sheet_url: str
 
 
-@router.patch("/{sid}/decision")
-def make_decision(sid: int, body: GoNogoBody, user: dict = Depends(current_user)):
-    if body.decision not in {"go", "nogo"}:
-        raise HTTPException(400, "decision must be 'go' or 'nogo'")
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE sourcing_candidates SET sourcing_status=?, nogo_reason=? WHERE id=?",
-            (body.decision, body.reason, sid),
-        )
-    return {"ok": True}
+@router.post("/import-sheet")
+def import_sheet(body: ImportSheetBody, user: dict = Depends(current_user)):
+    try:
+        result = import_from_sheet_url(body.sheet_url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if result.get("error") == "PERMISSION_DENIED":
+        raise HTTPException(403, result.get("message") or "시트가 비공개 상태입니다")
+    return result
 
 
-class BulkBody(BaseModel):
+class BulkDeleteBody(BaseModel):
     ids: list[int]
-    decision: str
-    reason: Optional[str] = None
 
 
-@router.post("/bulk-decision")
-def bulk_decision(body: BulkBody, user: dict = Depends(current_user)):
-    if body.decision not in {"go", "nogo"}:
-        raise HTTPException(400, "decision must be 'go' or 'nogo'")
+@router.post("/bulk-delete")
+def bulk_delete(body: BulkDeleteBody, user: dict = Depends(current_user)):
+    if not body.ids:
+        return {"deleted": 0}
+    placeholders = ",".join("?" * len(body.ids))
     with get_db() as conn:
-        for sid in body.ids:
-            conn.execute(
-                "UPDATE sourcing_candidates SET sourcing_status=?, nogo_reason=? WHERE id=?",
-                (body.decision, body.reason, sid),
-            )
-    return {"ok": True, "updated": len(body.ids)}
+        cur = conn.execute(
+            f"DELETE FROM sourcing_candidates WHERE id IN ({placeholders})",
+            tuple(body.ids),
+        )
+        deleted = cur.rowcount
+    return {"deleted": deleted}
+
+
+@router.post("/promote-all")
+def promote_all_route(user: dict = Depends(current_user)):
+    promoted = promote_all()
+    return {"promoted": promoted}

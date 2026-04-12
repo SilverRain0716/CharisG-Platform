@@ -1,10 +1,23 @@
 import React from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Card, StatusBadge } from '@charisg/ui';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Card, Button, StatusBadge } from '@charisg/ui';
 import { pa } from '../api/pa.js';
 
 export default function SettingsPage() {
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ['pa', 'settings'], queryFn: pa.settings });
+  const catsQ = useQuery({ queryKey: ['pa', 'discoveryCategories'], queryFn: pa.discoveryCategories });
+
+  const syncMut = useMutation({
+    mutationFn: pa.syncCategories,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['pa', 'discoveryCategories'] }),
+  });
+  const toggleMut = useMutation({
+    mutationFn: ({ cid, tracked }) => pa.toggleCategory(cid, tracked),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['pa', 'discoveryCategories'] }),
+  });
+
+  const topLevelCats = (catsQ.data || []).filter((c) => c.level === 1);
 
   return (
     <div className="space-y-6">
@@ -40,6 +53,44 @@ export default function SettingsPage() {
           </Card>
         </>
       )}
+
+      <Card
+        title="디스커버리 카테고리 추적"
+        action={
+          <Button size="sm" variant="secondary" onClick={() => syncMut.mutate()} disabled={syncMut.isPending}>
+            {syncMut.isPending ? '동기화 중…' : '카테고리 트리 동기화'}
+          </Button>
+        }
+      >
+        <p className="mb-3 text-xs text-ink-500">
+          선택한 카테고리에서 네이버 데이터랩 TOP 100 키워드를 수집합니다. 풀 파이프라인은 디스커버리 페이지에서 실행.
+        </p>
+        {catsQ.isLoading && <div className="text-sm text-ink-400">로딩 중...</div>}
+        {!catsQ.isLoading && topLevelCats.length === 0 && (
+          <div className="rounded-md border border-dashed border-ink-200 bg-ink-50 px-4 py-6 text-center text-sm text-ink-500">
+            카테고리 없음. 먼저 "카테고리 트리 동기화" 버튼을 눌러 주세요.
+          </div>
+        )}
+        {topLevelCats.length > 0 && (
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            {topLevelCats.map((c) => (
+              <label
+                key={c.cid}
+                className="flex cursor-pointer items-center gap-2 rounded-md border border-ink-200 bg-white px-3 py-2 hover:bg-ink-50"
+              >
+                <input
+                  type="checkbox"
+                  checked={!!c.tracked}
+                  onChange={(e) => toggleMut.mutate({ cid: c.cid, tracked: e.target.checked })}
+                  disabled={toggleMut.isPending}
+                />
+                <span className="text-sm text-ink-900">{c.name}</span>
+                <span className="ml-auto text-[11px] text-ink-400">cid={c.cid}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

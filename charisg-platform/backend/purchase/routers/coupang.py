@@ -1,4 +1,4 @@
-"""PA Coupang — 쿠팡 WING 업로드."""
+"""PA Coupang — 쿠팡 리스팅 조회 + WING 업로드."""
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,6 +8,18 @@ from backend.purchase.database import get_db
 from backend.purchase.services.coupang_service import register_product, get_orders
 
 router = APIRouter(prefix="/api/pa/coupang", tags=["pa-coupang"])
+
+
+@router.get("/listings")
+def list_listings(user: dict = Depends(current_user)):
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT l.*, p.title_ko, p.title_en, p.asin
+               FROM listings_pa l JOIN products p ON l.product_id = p.id
+               WHERE l.channel = 'coupang'
+               ORDER BY l.id DESC""",
+        ).fetchall()
+    return {"items": [dict(r) for r in rows]}
 
 
 @router.post("/upload/{product_id}")

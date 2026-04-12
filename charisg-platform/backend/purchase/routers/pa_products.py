@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
+from backend.purchase.services.channel_listing_service import send_to_channels
 
 router = APIRouter(prefix="/api/pa/products", tags=["pa-products"])
 
@@ -25,7 +26,7 @@ def list_products(
     with get_db() as conn:
         rows = conn.execute(
             f"""SELECT id, asin, title_ko, title_en, sale_price_krw, cost_usd, margin_pct,
-                       category_path, status, bsr, created_at
+                       category_path, status, bsr, ai_processed_at, seo_title, created_at
                 FROM products WHERE {' AND '.join(where)}
                 ORDER BY id DESC LIMIT ? OFFSET ?""",
             (*params, limit, offset),
@@ -55,6 +56,42 @@ def get_product(pid: int, user: dict = Depends(current_user)):
         "listings": [dict(l) for l in listings],
         "margin": dict(margin) if margin else None,
     }
+
+
+class SendToChannelBody(BaseModel):
+    channels: list[str] = ["smartstore", "coupang"]
+
+
+@router.post("/{pid}/send-to-channel")
+def send_to_channel(pid: int, body: SendToChannelBody, user: dict = Depends(current_user)):
+    try:
+        result = send_to_channels(pid, body.channels)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return result
+
+
+@router.post("/bulk-send-to-channel")
+def bulk_send_to_channel(body: SendToChannelBody, user: dict = Depends(current_user)):
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id FROM products
+               WHERE business_model='purchase' AND ai_processed_at IS NOT NULL AND cost_usd IS NOT NULL
+               ORDER BY id"""
+        ).fetchall()
+    if not rows:
+        raise HTTPException(400, "채널 전송 대상 없음 (AI 처리 완료 + cost_usd 필요)")
+
+    results = []
+    errors = []
+    for r in rows:
+        try:
+            res = send_to_channels(r["id"], body.channels)
+            results.append(res)
+        except Exception as e:
+            errors.append({"product_id": r["id"], "error": str(e)})
+
+    return {"sent": len(results), "errors": len(errors), "error_details": errors}
 
 
 class StatusBody(BaseModel):

@@ -1,16 +1,13 @@
-"""PA datalab — 네이버 데이터랩."""
-from fastapi import APIRouter, BackgroundTasks, Depends
+"""PA datalab — 네이버 데이터랩 (카테고리 트렌드 조회 전용).
+
+풀 파이프라인 실행은 /api/pa/discovery/run 으로 이동됨.
+"""
+from fastapi import APIRouter, Depends
 
 from backend.purchase.auth import current_user
 from backend.purchase.services import naver_datalab_service
 
 router = APIRouter(prefix="/api/pa/datalab", tags=["pa-datalab"])
-
-
-@router.post("/run")
-def run_datalab(background: BackgroundTasks, user: dict = Depends(current_user)):
-    background.add_task(naver_datalab_service.run_full_pipeline)
-    return {"started": True}
 
 
 @router.get("/trends")

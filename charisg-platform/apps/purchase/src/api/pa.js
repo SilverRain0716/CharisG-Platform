@@ -4,8 +4,13 @@ export const pa = {
   summary:        () => apiFetch('/api/pa/summary'),
   dashboard:      () => apiFetch('/api/pa/dashboard'),
 
-  // Discovery
-  runDatalab:     () => apiFetch('/api/pa/datalab/run', { method: 'POST' }),
+  // Discovery — 5단계 풀 파이프라인 (카테고리 추적 기반)
+  discoveryCategories: () => apiFetch('/api/pa/discovery/categories'),
+  syncCategories:      () => apiFetch('/api/pa/discovery/categories/sync', { method: 'POST' }),
+  toggleCategory:      (cid, tracked) => apiFetch(`/api/pa/discovery/categories/${cid}`, { method: 'PATCH', body: { tracked } }),
+  discoveryRun:        () => apiFetch('/api/pa/discovery/run', { method: 'POST' }),
+  discoveryStatus:     () => apiFetch('/api/pa/discovery/status'),
+
   trends:         (cat = '50000000', days = 30) => apiFetch(`/api/pa/datalab/trends?category_param=${cat}&days=${days}`),
   keywords:       (params = {}) => {
     const q = new URLSearchParams(params).toString();
@@ -16,15 +21,15 @@ export const pa = {
   searchadVolumes: (keywords) => apiFetch('/api/pa/searchad/volumes', { method: 'POST', body: { keywords } }),
 
   // Sourcing
-  sourcing:       (params = {}) => {
+  sourcing:             (params = {}) => {
     const q = new URLSearchParams(params).toString();
     return apiFetch(`/api/pa/sourcing${q ? '?' + q : ''}`);
   },
-  decision:       (id, decision, reason) => apiFetch(`/api/pa/sourcing/${id}/decision`, { method: 'PATCH', body: { decision, reason } }),
-  bulkDecision:   (ids, decision, reason) => apiFetch('/api/pa/sourcing/bulk-decision', { method: 'POST', body: { ids, decision, reason } }),
+  importSheet:          (sheet_url) => apiFetch('/api/pa/sourcing/import-sheet', { method: 'POST', body: { sheet_url } }),
+  bulkDeleteCandidates: (ids) => apiFetch('/api/pa/sourcing/bulk-delete', { method: 'POST', body: { ids } }),
+  promoteAllSourcing:   () => apiFetch('/api/pa/sourcing/promote-all', { method: 'POST', body: {} }),
 
-  // Margin / Customs
-  marginCalc:     (req) => apiFetch('/api/pa/margin/calculate', { method: 'POST', body: req }),
+  // Customs
   customsQuick:   (req) => apiFetch('/api/pa/customs/quick', { method: 'POST', body: req }),
   customsTariff:  (req) => apiFetch('/api/pa/customs/tariff', { method: 'POST', body: req }),
 
@@ -38,6 +43,19 @@ export const pa = {
 
   // Detail page
   generateDetail: (pid) => apiFetch(`/api/pa/detail-page/${pid}/generate`, { method: 'POST' }),
+  generateDetailBatch: (body) => fetch('/api/pa/detail-page/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body),
+  }),
+  getDetailPage: (pid) => apiFetch(`/api/pa/detail-page/${pid}`),
+
+  // Channel listing
+  sendToChannel:    (pid, channels) => apiFetch(`/api/pa/products/${pid}/send-to-channel`, { method: 'POST', body: { channels } }),
+  bulkSendToChannel: () => apiFetch('/api/pa/products/bulk-send-to-channel', { method: 'POST', body: {} }),
+  smartstoreListings: () => apiFetch('/api/pa/smartstore/listings'),
+  coupangListings:    () => apiFetch('/api/pa/coupang/listings'),
 
   // Upload
   uploadSmartstore: (pid) => apiFetch(`/api/pa/smartstore/upload/${pid}`, { method: 'POST' }),

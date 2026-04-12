@@ -31,5 +31,11 @@ def get_db():
 def init_db() -> None:
     from backend_shared.migrations import MigrationRunner
     runner = MigrationRunner(str(DB_PATH))
-    schema = Path(__file__).resolve().parent / "migrations" / "schema_pa.sql"
-    runner.apply(schema, version=1, description="purchase initial schema")
+    migrations_dir = Path(__file__).resolve().parent / "migrations"
+    runner.apply_all([
+        (1, migrations_dir / "schema_pa.sql", "purchase initial schema"),
+        (2, migrations_dir / "schema_pa_v2.sql", "discovery pipeline: categories + runs"),
+        (3, migrations_dir / "schema_pa_v3.sql", "sheet import: monthly_sales + category + notes"),
+        (4, migrations_dir / "schema_pa_v4.sql", "products/listings_pa expand + image_cache + pricing settings seed"),
+        (5, migrations_dir / "schema_pa_v5.sql", "products SEO columns + detail_pages html/market/platform"),
+    ])

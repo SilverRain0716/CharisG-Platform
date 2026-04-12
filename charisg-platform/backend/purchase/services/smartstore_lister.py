@@ -20,12 +20,11 @@ def build_payload(product_id: int) -> Optional[dict]:
         if not p:
             return None
         detail = conn.execute(
-            "SELECT sections FROM detail_pages WHERE product_id=? ORDER BY id DESC LIMIT 1",
+            "SELECT html_content FROM detail_pages WHERE product_id=? ORDER BY updated_at DESC LIMIT 1",
             (product_id,),
         ).fetchone()
 
-    sections = json.loads(detail["sections"]) if detail and detail["sections"] else []
-    desc_html = "".join(s.get("html", "") for s in sections)
+    desc_html = detail["html_content"] if detail and detail["html_content"] else ""
 
     payload = {
         "originProduct": {

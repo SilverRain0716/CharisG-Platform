@@ -17,7 +17,7 @@ export class ApiError extends Error {
  *   const created = await apiFetch('/api/pa/orders', { method: 'POST', body: {...} });
  */
 export async function apiFetch(path, opts = {}) {
-  const { method = 'GET', body, headers = {}, signal, raw = false } = opts;
+  const { method = 'GET', body, headers = {}, signal, raw = false, silent401 = false } = opts;
 
   const init = {
     method,
@@ -41,7 +41,9 @@ export async function apiFetch(path, opts = {}) {
   const res = await fetch(path, init);
 
   if (res.status === 401) {
-    redirectToLogin();
+    if (!silent401) {
+      redirectToLogin();
+    }
     throw new ApiError('Unauthorized', 401, null);
   }
 

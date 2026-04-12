@@ -31,16 +31,41 @@ CJ_EMAIL = os.environ.get("CJ_EMAIL", "")
 CJ_PASSWORD = os.environ.get("CJ_PASSWORD", "")
 CJ_API_KEY = os.environ.get("CJ_API_KEY", "")
 
-# Naver
+# Naver — 모노리스 호환 fallback 적용
+# 모노리스는 NAVER_CLIENT_ID/SECRET 1쌍으로 스마트스토어 (커머스) 인증을 처리했음.
+# 우리 새 스키마는 데이터랩 / 검색광고 / 커머스 3개 영역으로 분리한 키 이름을 쓴다.
+# COMMERCE_* 가 비어있으면 모노리스의 NAVER_CLIENT_ID/SECRET 로 폴백.
 NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
 NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
-NAVER_DATALAB_CLIENT_ID = os.environ.get("NAVER_DATALAB_CLIENT_ID", "")
-NAVER_DATALAB_CLIENT_SECRET = os.environ.get("NAVER_DATALAB_CLIENT_SECRET", "")
+
+NAVER_DATALAB_CLIENT_ID = (
+    os.environ.get("NAVER_DATALAB_CLIENT_ID")
+    or NAVER_CLIENT_ID  # 모노리스 폴백 (단일 키 재사용)
+    or ""
+)
+NAVER_DATALAB_CLIENT_SECRET = (
+    os.environ.get("NAVER_DATALAB_CLIENT_SECRET")
+    or NAVER_CLIENT_SECRET
+    or ""
+)
+
 NAVER_SEARCHAD_API_KEY = os.environ.get("NAVER_SEARCHAD_API_KEY", "")
 NAVER_SEARCHAD_SECRET_KEY = os.environ.get("NAVER_SEARCHAD_SECRET_KEY", "")
 NAVER_SEARCHAD_CUSTOMER_ID = os.environ.get("NAVER_SEARCHAD_CUSTOMER_ID", "")
-NAVER_COMMERCE_CLIENT_ID = os.environ.get("NAVER_COMMERCE_CLIENT_ID", "")
-NAVER_COMMERCE_CLIENT_SECRET = os.environ.get("NAVER_COMMERCE_CLIENT_SECRET", "")
+
+NAVER_COMMERCE_CLIENT_ID = (
+    os.environ.get("NAVER_COMMERCE_CLIENT_ID")
+    or NAVER_CLIENT_ID  # 모노리스가 NAVER_CLIENT_ID 로 커머스 호출
+    or ""
+)
+NAVER_COMMERCE_CLIENT_SECRET = (
+    os.environ.get("NAVER_COMMERCE_CLIENT_SECRET")
+    or NAVER_CLIENT_SECRET
+    or ""
+)
+
+# Discord (모노리스 키명 그대로)
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 # Coupang
 COUPANG_ACCESS_KEY = os.environ.get("COUPANG_ACCESS_KEY", "")

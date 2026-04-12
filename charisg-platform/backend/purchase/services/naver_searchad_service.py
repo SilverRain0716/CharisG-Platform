@@ -40,6 +40,23 @@ def _headers(method: str, uri: str) -> dict:
     }
 
 
+def _parse_count(v) -> int:
+    """네이버 검색광고 응답 카운트를 int 로. '< 10' 같은 저볼륨 문자열 → 0."""
+    if v is None:
+        return 0
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v)
+    s = str(v).strip()
+    if not s or s.startswith("<"):
+        return 0
+    try:
+        return int(s.replace(",", ""))
+    except ValueError:
+        return 0
+
+
 def get_keyword_volumes(keywords: list[str]) -> Optional[list[dict]]:
     """월간 PC + 모바일 검색량 조회. 한 번에 5개씩."""
     if not (NAVER_SEARCHAD_API_KEY and NAVER_SEARCHAD_SECRET_KEY):
@@ -53,13 +70,18 @@ def get_keyword_volumes(keywords: list[str]) -> Optional[list[dict]]:
         try:
             r = requests.get(BASE + uri, headers=_headers("GET", uri), params=params, timeout=10)
             r.raise_for_status()
-            for it in r.json().get("keywordList", []):
-                out.append({
-                    "keyword": it.get("relKeyword"),
-                    "monthly_pc": int(it.get("monthlyPcQcCnt", 0) or 0),
-                    "monthly_mobile": int(it.get("monthlyMobileQcCnt", 0) or 0),
-                    "competition": it.get("compIdx"),
-                })
+            payload = r.json().get("keywordList", [])
         except Exception as e:
             logger.error(f"검색광고 호출 실패 ({chunk}): {e}")
+            continue
+        for it in payload:
+            try:
+                out.append({
+                    "keyword": it.get("relKeyword"),
+                    "monthly_pc": _parse_count(it.get("monthlyPcQcCnt", 0)),
+                    "monthly_mobile": _parse_count(it.get("monthlyMobileQcCnt", 0)),
+                    "competition": it.get("compIdx"),
+                })
+            except Exception as e:
+                logger.warning(f"검색광고 파싱 스킵 ({it.get('relKeyword')}): {e}")
     return out
