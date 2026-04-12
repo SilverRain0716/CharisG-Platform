@@ -18,6 +18,7 @@ sourcing_candidates 테이블을 비운다.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from backend.purchase.database import DB_PATH
@@ -34,7 +35,7 @@ def promote_all() -> int:
     try:
         conn.execute("PRAGMA foreign_keys=OFF")
         rows = conn.execute(
-            "SELECT id, asin, title, price_usd FROM sourcing_candidates"
+            "SELECT id, asin, title, price_usd, image_url FROM sourcing_candidates"
         ).fetchall()
 
         if not rows:
@@ -42,11 +43,12 @@ def promote_all() -> int:
 
         promoted = 0
         for r in rows:
+            images_json = json.dumps([r["image_url"]], ensure_ascii=False) if r["image_url"] else None
             conn.execute(
                 """INSERT INTO products
-                   (sourcing_id, business_model, asin, title_en, cost_usd, status)
-                   VALUES (?, 'purchase', ?, ?, ?, 'draft')""",
-                (r["id"], r["asin"], r["title"], r["price_usd"]),
+                   (sourcing_id, business_model, asin, title_en, cost_usd, images_json, status)
+                   VALUES (?, 'purchase', ?, ?, ?, ?, 'draft')""",
+                (r["id"], r["asin"], r["title"], r["price_usd"], images_json),
             )
             promoted += 1
 

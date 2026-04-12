@@ -7,6 +7,7 @@
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -44,6 +45,67 @@ def _get_retention_days() -> int:
             return int(row["value"]) if row else DEFAULT_RETENTION_DAYS
     except Exception:
         return DEFAULT_RETENTION_DAYS
+
+
+# ── Amazon 전체 이미지 크롤링 ──────────────────────
+
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+
+# Amazon colorImages JSON 내 hiRes/large URL 추출 패턴
+_PAT_HIRES = re.compile(r'"hiRes"\s*:\s*"(https://m\.media-amazon\.com/images/I/[^"]+)"')
+_PAT_LARGE = re.compile(r'"large"\s*:\s*"(https://m\.media-amazon\.com/images/I/[^"]+)"')
+# 이미지 ID 추출 (중복 제거용) — e.g. "61aBcDeFgH" from ".../I/61aBcDeFgH._AC_SL1500_.jpg"
+_PAT_IMG_ID = re.compile(r'/I/([A-Za-z0-9+_%-]+)\.')
+
+
+def fetch_amazon_images(asin: str, max_images: int = 15) -> list[str]:
+    """Amazon 상품 페이지에서 전체 이미지 URL 수집 (hiRes 우선, fallback large).
+
+    Returns: 이미지 URL 리스트 (최대 max_images개, 중복 제거).
+    """
+    url = f"https://www.amazon.com/dp/{asin}"
+    try:
+        resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=20)
+        if resp.status_code != 200:
+            logger.warning(f"Amazon 페이지 접근 실패 ({resp.status_code}): {asin}")
+            return []
+    except Exception as e:
+        logger.warning(f"Amazon 페이지 요청 오류 ({asin}): {e}")
+        return []
+
+    html = resp.text
+
+    # hiRes 이미지 전체 수집
+    hires_urls = _PAT_HIRES.findall(html)
+    large_urls = _PAT_LARGE.findall(html)
+
+    # 이미지 ID 기준 중복 제거 + 순서 유지
+    seen_ids: set[str] = set()
+    result: list[str] = []
+
+    for img_url in hires_urls:
+        m = _PAT_IMG_ID.search(img_url)
+        img_id = m.group(1) if m else img_url
+        if img_id not in seen_ids:
+            seen_ids.add(img_id)
+            result.append(img_url)
+
+    # hiRes에 없는 이미지가 large에 있을 수 있음 — 보충
+    for img_url in large_urls:
+        m = _PAT_IMG_ID.search(img_url)
+        img_id = m.group(1) if m else img_url
+        if img_id not in seen_ids:
+            seen_ids.add(img_id)
+            result.append(img_url)
+
+    result = result[:max_images]
+    logger.info(f"🔍 Amazon {asin}: {len(result)}장 이미지 발견 (hiRes {len(hires_urls)}, large {len(large_urls)})")
+    return result
 
 
 # ── 다운로드 ─────────────────────────────────────

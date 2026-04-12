@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from backend.purchase.database import get_db
-from backend.purchase.services.image_downloader import download_product_images
+from backend.purchase.services.image_downloader import download_product_images, fetch_amazon_images
 from backend_shared.ai import translate_text, generate_seo, map_category
 
 logger = logging.getLogger(__name__)
@@ -227,8 +227,29 @@ async def process_product(product_id: int, platform: str = "smartstore") -> dict
     if not title_en:
         raise ValueError(f"product {product_id}: title_en 없음 — 번역 불가")
 
-    # 0. 이미지 다운로드 (Amazon → 로컬)
+    # 0. 이미지 수집 — images_json이 부족하면 Amazon에서 전체 이미지 크롤링
     images_json = row.get("images_json") or "[]"
+    try:
+        existing_urls = json.loads(images_json) if images_json else []
+    except (json.JSONDecodeError, TypeError):
+        existing_urls = []
+
+    asin = row.get("asin") or ""
+    if len(existing_urls) < 3 and asin:
+        logger.info(f"[product {product_id}] 이미지 {len(existing_urls)}장 → Amazon에서 전체 수집 시도")
+        amazon_urls = fetch_amazon_images(asin)
+        if amazon_urls:
+            # 기존 URL + 신규 URL 합치기 (중복 제거)
+            merged = list(dict.fromkeys(existing_urls + amazon_urls))
+            images_json = json.dumps(merged, ensure_ascii=False)
+            # products 테이블에도 업데이트
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE products SET images_json=? WHERE id=?",
+                    (images_json, product_id),
+                )
+            logger.info(f"[product {product_id}] 이미지 보충 완료: {len(existing_urls)} → {len(merged)}장")
+
     img_result = await download_product_images(product_id, images_json)
 
     # 1. 번역

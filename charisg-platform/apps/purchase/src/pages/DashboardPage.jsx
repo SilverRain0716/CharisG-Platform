@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, KPICard, FunnelChart, Button } from '@charisg/ui';
 import { pa } from '../api/pa.js';
 
-const PROMPT_URL = '/purchase/prompts/amazon_kr_sourcing_v3.1.md';
+const PROMPT_URL = '/purchase/prompts/amazon_kr_sourcing_v3.2.md';
 
 function PromptCard() {
   const [copied, setCopied] = useState(false);
@@ -25,14 +25,14 @@ function PromptCard() {
   };
 
   return (
-    <Card title="Amazon 소싱 프롬프트 (v3.1)">
+    <Card title="Amazon 소싱 프롬프트 (v3.2)">
       <p className="text-sm text-ink-600 mb-4">
-        Claude.ai 웹 프로젝트 시스템 프롬프트에 붙여넣으면 디스커버리 키워드를 ASIN 10컬럼 구글시트로 변환합니다.
+        Claude.ai 웹 프로젝트 시스템 프롬프트에 붙여넣으면 디스커버리 키워드를 ASIN 11컬럼(이미지 URL 포함) 구글시트로 변환합니다.
       </p>
       <div className="flex items-center gap-2">
         <a
           href={PROMPT_URL}
-          download="amazon_kr_sourcing_v3.1.md"
+          download="amazon_kr_sourcing_v3.2.md"
           className="inline-flex items-center rounded-md bg-brand-pa-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-pa-600"
         >
           다운로드

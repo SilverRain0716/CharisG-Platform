@@ -45,6 +45,7 @@ HEADER_ALIASES = {
     "monthly_sales": ["월판매량", "monthly_sales", "월 판매량"],
     "category":      ["카테고리", "category"],
     "notes":         ["가 (특이사항)", "특이사항", "비고", "notes"],
+    "image_url":     ["이미지", "이미지 URL", "image", "image_url", "대표이미지", "thumbnail"],
 }
 
 
@@ -157,6 +158,7 @@ def parse_row(row: dict) -> Optional[dict]:
         "monthly_sales": _pick(row, HEADER_ALIASES["monthly_sales"]) or None,
         "category": _pick(row, HEADER_ALIASES["category"]) or None,
         "notes": _pick(row, HEADER_ALIASES["notes"]) or None,
+        "image_url": _pick(row, HEADER_ALIASES["image_url"]) or None,
     }
 
 
@@ -169,12 +171,12 @@ def import_rows(rows: list[dict]) -> tuple[int, int]:
             cur = conn.execute(
                 """INSERT OR IGNORE INTO sourcing_candidates
                    (asin, title, amazon_url, price_usd, rating, review_count,
-                    monthly_sales, category, notes, sourcing_status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered')""",
+                    monthly_sales, category, notes, image_url, sourcing_status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered')""",
                 (
                     r["asin"], r["title"], r["amazon_url"], r["price_usd"],
                     r["rating"], r["review_count"], r["monthly_sales"],
-                    r["category"], r["notes"],
+                    r["category"], r["notes"], r.get("image_url"),
                 ),
             )
             if cur.rowcount > 0:
