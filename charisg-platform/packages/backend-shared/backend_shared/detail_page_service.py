@@ -44,9 +44,97 @@ SECTION_HTML = {
   <strong>🔑 개인통관고유부호 안내</strong>
   <p style="margin:8px 0 0;font-size:13px;color:#555">해외 직배송 상품 수령을 위해 개인통관고유부호가 필요합니다.</p></div>""",
 
-    "policy": """<div style="padding:16px">
-  <h4 style="font-size:14px;font-weight:700;margin-bottom:8px">📋 반품/환불 정책</h4>
-  <p style="font-size:12px;color:#555;line-height:1.6">• 단순변심: 수령 후 7일, 왕복 배송비 고객 부담<br>• 불량/오배송: 30일 이내, 100% 환불</p></div>""",
+    "amazon_notice": """<div style="max-width:860px;margin:20px auto;font-family:'Noto Sans KR',sans-serif">
+  <!-- 아마존 상품 안내 헤더 -->
+  <div style="background:linear-gradient(135deg,#232F3E 0%,#37475A 100%);border-radius:16px 16px 0 0;padding:36px 32px;text-align:center">
+    <div style="margin-bottom:16px">
+      <span style="font-size:32px;font-weight:800;color:#FF9900;letter-spacing:-1px">amazon</span>
+      <span style="display:block;width:60px;height:4px;background:#FF9900;border-radius:2px;margin:4px auto 0"></span>
+    </div>
+    <div style="display:inline-block;background:rgba(255,153,0,0.15);border:2px solid rgba(255,153,0,0.4);border-radius:30px;padding:8px 24px;font-size:18px;font-weight:700;color:#fff;margin-bottom:12px">ℹ️ 아마존 상품 안내</div>
+    <p style="font-size:20px;font-weight:600;color:#fff;line-height:1.6;margin:0">
+      아마존 글로벌 스토어에서 판매 중인 상품으로<br>
+      공식 판매자인 <span style="color:#FF9900;font-weight:800">아마존 미국</span>에서 판매/배송을 책임집니다.
+    </p>
+  </div>
+
+  <!-- 안내 카드들 -->
+  <div style="background:#fff;padding:24px 28px;border-left:3px solid #FF9900;border-right:3px solid #FF9900">
+    <!-- 파손/오배송 안내 -->
+    <div style="background:#FFF8F0;border-radius:12px;padding:20px 24px;margin-bottom:16px;border:1px solid #FFE0B2">
+      <div style="font-size:15px;font-weight:700;color:#232F3E;margin-bottom:8px">
+        <span style="font-size:18px;color:#FF9900;font-weight:800;margin-right:6px">amazon</span> 📦 파손 / 오배송 안내
+      </div>
+      <p style="font-size:14px;color:#555;line-height:1.7;margin:0">
+        받아보신 상품이 파손 또는 오배송 된 경우 <span style="color:#FF9900;font-weight:600;text-decoration:underline;text-underline-offset:3px">1:1 문의</span>로 사진을 첨부해 주시면<br>
+        불편함 없이 환불받으실 수 있도록 도움드리겠습니다.
+      </p>
+    </div>
+
+    <!-- 해외상품 특성 안내 -->
+    <div style="background:#F5F8FC;border-radius:12px;padding:20px 24px;margin-bottom:16px;border:1px solid #D6E4F0">
+      <div style="font-size:15px;font-weight:700;color:#232F3E;margin-bottom:8px">
+        <span style="font-size:18px;color:#FF9900;font-weight:800;margin-right:6px">amazon</span> 🌍 해외 상품 안내
+      </div>
+      <p style="font-size:14px;color:#555;line-height:1.7;margin:0">
+        미국 등 해외에서 판매하는 상품으로 <span style="color:#D94040;font-weight:600">사이즈, 사용 연령, 언어, AS</span> 등의 기준이 국내 제품과 다를 수 있습니다.
+      </p>
+    </div>
+
+    <!-- 취소 및 반품 -->
+    <div style="background:#F0FAF5;border-radius:12px;padding:20px 24px;margin-bottom:16px;border:1px solid #B8E6D0">
+      <div style="font-size:15px;font-weight:700;color:#232F3E;margin-bottom:8px">
+        <span style="font-size:18px;color:#FF9900;font-weight:800;margin-right:6px">amazon</span> 🔄 취소 및 반품
+      </div>
+      <ul style="font-size:14px;color:#555;line-height:1.8;margin:0;padding-left:18px">
+        <li>결제 완료 후 바로 취소, <span style="color:#D94040;font-weight:600">배송 완료 후 7일 이내</span> 반품 가능</li>
+        <li>이후 고객센터를 통해 배송 완료 기준 <span style="font-weight:600">최대 30일 이전</span>까지 반품 신청이 가능합니다.</li>
+        <li>상품에 하자가 있는 경우 아마존 한국 고객센터(<span style="color:#FF9900;font-weight:700">1566-7171</span>/유료)로 연락주세요.</li>
+      </ul>
+      <div style="background:#E8F5E9;border-radius:8px;padding:12px 16px;margin-top:12px;font-size:13px;color:#666">
+        ℹ️ 배송 규격에 따라서 상품이 분리 배송될 수 있습니다. 분리 배송된 상품을 고객 사유로 반품할 경우, 박스 별 반품 배송비가 부과될 수 있습니다.
+      </div>
+    </div>
+
+    <!-- 기타 -->
+    <div style="background:#F9F9F9;border-radius:12px;padding:16px 24px;border:1px solid #E0E0E0">
+      <p style="font-size:13px;color:#888;line-height:1.7;margin:0">
+        <span style="font-size:15px;color:#FF9900;font-weight:800;margin-right:4px">amazon</span>
+        아마존 미국이 판매하는 상품에 대해서는 아마존 글로벌 스토어 판매 조건이 적용됩니다.
+      </p>
+    </div>
+  </div>
+  <div style="height:4px;background:linear-gradient(90deg,#FF9900,#232F3E);border-radius:0 0 16px 16px"></div>
+</div>""",
+
+    "policy": """<div style="max-width:860px;margin:16px auto;font-family:'Noto Sans KR',sans-serif">
+  <div style="background:#fff;border-radius:12px;border:1px solid #eee;overflow:hidden">
+    <div style="background:#F7F5F0;padding:16px 24px;border-bottom:2px solid #E8845A">
+      <span style="font-size:16px;font-weight:700;color:#1B3A5C">📋 반품 / 교환 기준</span>
+    </div>
+    <div style="padding:20px 24px">
+      <p style="font-size:14px;color:#555;line-height:1.7;margin:0 0 16px">
+        상품 수령 후 <span style="color:#D94040;font-weight:600">7일 이내</span>에 신청하실 수 있습니다.
+        단, 제품이 표시·광고 내용과 다르거나 계약과 다르게 이행된 날부터 <span style="font-weight:600">30일 이내</span>에 교환/반품이 가능합니다.
+      </p>
+
+      <div style="font-size:14px;font-weight:700;color:#1B3A5C;margin-bottom:8px">반품 / 교환 불가 사유</div>
+      <ul style="font-size:13px;color:#555;line-height:1.8;margin:0 0 16px;padding-left:18px">
+        <li>소비자의 책임 있는 사유로 상품 등이 멸실 또는 훼손된 경우 (단 상품 확인을 위한 포장 훼손 제외)</li>
+        <li>소비자의 사용 또는 소비에 의해 상품 등의 가치가 현저히 감소한 경우</li>
+        <li>시간 경과에 의해 재판매가 곤란할 정도로 상품 등의 가치가 현저히 감소한 경우</li>
+        <li>복제가 가능한 상품 등의 포장을 훼손한 경우</li>
+        <li>소비자의 주문에 따라 개별적으로 생산되는 상품이 제작에 들어간 경우</li>
+      </ul>
+
+      <div style="font-size:14px;font-weight:700;color:#1B3A5C;margin-bottom:8px">저온/신선 상품</div>
+      <ul style="font-size:13px;color:#555;line-height:1.8;margin:0;padding-left:18px">
+        <li>고객 귀책 사유 (단순 변심, 주소 오기재, 주문 착오, 보관 부주의 및 상품 사용으로 가치가 하락한 경우 등)</li>
+        <li>다른 옵션 상품으로 교환을 요청하는 경우</li>
+      </ul>
+    </div>
+  </div>
+</div>""",
 
     "faq": """<div style="padding:16px">
   <h4 style="font-size:14px;font-weight:700;margin-bottom:8px">❓ 자주 묻는 질문</h4>
@@ -227,6 +315,7 @@ def _load_sections(template_id: Optional[int]) -> list:
         {"id": "specs", "enabled": True},
         {"id": "features", "enabled": True},
         {"id": "customs", "enabled": True},
+        {"id": "amazon_notice", "enabled": True},
         {"id": "policy", "enabled": True},
         {"id": "faq", "enabled": True},
         {"id": "cs", "enabled": True},

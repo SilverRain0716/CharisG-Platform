@@ -3,14 +3,49 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, DataTable, StatusBadge } from '@charisg/ui';
 import { pa } from '../api/pa.js';
 
+function InlinePrice({ row, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState('');
+  const v = row.sale_price_krw;
+
+  if (!editing) {
+    return (
+      <span
+        className="cursor-pointer hover:text-indigo-600 hover:underline"
+        title="클릭하여 판매가 수정"
+        onClick={() => { setVal(v || ''); setEditing(true); }}
+      >
+        {v != null ? '₩' + Number(v).toLocaleString() : '—'}
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="number"
+        step="100"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { onSave(row.id, Number(val)); setEditing(false); }
+          if (e.key === 'Escape') setEditing(false);
+        }}
+        autoFocus
+        className="w-24 rounded border border-ink-300 px-1.5 py-0.5 text-sm outline-none focus:border-indigo-500"
+      />
+      <button onClick={() => { onSave(row.id, Number(val)); setEditing(false); }} className="text-green-600 text-xs font-bold">✓</button>
+      <button onClick={() => setEditing(false)} className="text-ink-400 text-xs">✕</button>
+    </div>
+  );
+}
+
 const COLS = [
   { key: 'id', label: 'ID', width: '60px' },
   { key: 'title_ko', label: '상품명', wrap: true, maxWidth: '360px',
     render: (v, row) => v || <span className="text-ink-400">{row.title_en || '—'}</span> },
   { key: 'seo_title', label: 'SEO 제목', wrap: true, maxWidth: '200px',
     render: (v) => v || <span className="text-ink-300">—</span> },
-  { key: 'sale_price_krw', label: '판매가', sortable: true, width: '110px',
-    render: (v) => v != null ? '₩' + Number(v).toLocaleString() : '—' },
   { key: 'margin_pct', label: '마진%', sortable: true, width: '80px',
     render: (v) => v != null ? Number(v).toFixed(1) + '%' : '—' },
   { key: 'ai_processed_at', label: 'AI', width: '60px',
@@ -95,6 +130,14 @@ export default function ProductManagementPage() {
       qc.invalidateQueries({ queryKey: ['pa', 'products'] });
     },
   });
+
+  const updatePrice = useMutation({
+    mutationFn: ({ pid, price }) => pa.updateProductPrice(pid, price),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['pa', 'products'] }),
+  });
+  const handlePriceSave = (pid, price) => {
+    if (price > 0) updatePrice.mutate({ pid, price });
+  };
 
   const [sendingId, setSendingId] = useState(null);
   const sendChannel = useMutation({
@@ -227,7 +270,12 @@ export default function ProductManagementPage() {
         ) : (
           <DataTable
             columns={[
-              ...COLS,
+              ...COLS.slice(0, 3),
+              {
+                key: 'sale_price_krw', label: '판매가', sortable: true, width: '140px',
+                render: (_, row) => <InlinePrice row={row} onSave={handlePriceSave} />,
+              },
+              ...COLS.slice(3),
               {
                 key: 'actions',
                 label: '액션',

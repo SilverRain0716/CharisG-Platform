@@ -53,7 +53,7 @@ PA_SECTION_AUTH = """<div style="background:linear-gradient(135deg,#1B3A5C 0%,#0
       <span style="display:inline-block;width:28px;height:28px;background:#E8845A;border-radius:50%;color:#fff;font-size:16px;font-weight:700;line-height:28px;margin-bottom:16px">4</span>
       <span style="font-size:58px;margin-bottom:14px;display:block">🚚</span>
       <div style="font-size:23px;font-weight:700;color:#1B3A5C;margin-bottom:6px">빠르고 안전한 배송</div>
-      <div style="font-size:18px;color:#888;line-height:1.5">CJ대한통운 / 우체국택배<br>안전하고 빠른 국내 배송</div>
+      <div style="font-size:18px;color:#888;line-height:1.5">검증된 국내 택배사를 통한<br>안전하고 빠른 배송</div>
     </div>
   </div>
 </div>"""
@@ -67,7 +67,7 @@ PA_SECTION_SHIPPING = """<div style="background:#E8845A;padding:50px 40px 30px;t
   <div style="display:inline-flex;align-items:center;gap:8px;background:#F0FAF5;border:1px solid #B8E6D0;border-radius:30px;padding:10px 24px;font-size:20px;color:#2D8B5E;font-weight:600;margin-bottom:24px">
     ✈️ <span>본 상품은 <b>해외배송</b> 상품입니다.</span>
   </div>
-  <div style="font-size:29px;color:#333;margin-bottom:6px">배송기간은 주문일로부터 약 <span style="font-weight:800;color:#E8845A;font-size:34px">7~14일</span> 정도입니다.</div>
+  <div style="font-size:29px;color:#333;margin-bottom:6px">배송기간은 주문일로부터 약 <span style="font-weight:800;color:#E8845A;font-size:34px">7~20일</span> 정도입니다.</div>
   <div style="font-size:17px;color:#999;margin-bottom:36px;line-height:1.6">(평일 영업일 기준이며 현지 사정 및 공휴일에 따라<br>배송 기간에 차이가 있을 수 있습니다)</div>
   <div style="display:flex;justify-content:center;align-items:flex-start;margin-bottom:32px">
     <div style="display:flex;flex-direction:column;align-items:center;width:110px">
@@ -129,7 +129,6 @@ PA_SECTION_NOTICE = """<div style="background:#1B3A5C;padding:50px 40px 30px;tex
   <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
     <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">주문 관련 안내</div>
     <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
-      · 판매 중인 상품은 <span style="color:#E8845A;font-weight:600;text-decoration:underline;text-underline-offset:3px">재고를 보유하지 않으며</span> 고객님의 주문이 확인 되면 공식 판매업체에 발주를 넣고 구매하여 발송해 드리고 있습니다.<br>
       · 해외 현지 발주 후 단순 변심으로 인한 주문 변경 / 취소, 반품 요청 시 <span style="color:#D94040;font-weight:600">별도 반품 수수료가 발생</span>하게 되므로, 신중히 결정 후 구매부탁드리겠습니다.<br>
       · 수령인의 주문 정보를 입력하실 때 개인통관고유부호 발급 시 기재했던 정보<br>
       <span style="color:#D94040;font-weight:600">수령인 성함 + 수령인 연락처 + 수령인 개인통관고유부호</span><br>
@@ -137,17 +136,27 @@ PA_SECTION_NOTICE = """<div style="background:#1B3A5C;padding:50px 40px 30px;tex
       <span style="font-size:16px;color:#999">*3가지 중 하나라도 맞지 않는다면 통관이 되지 않습니다.</span><br>
       <span style="font-size:16px;color:#999">*개인통관고유부호 발급 당시의 성함과 연락처 등의 정보가 바뀐 경우는 변경 &amp; 재발급을 부탁드립니다.</span>
     </div>
+    <div style="background:#F0F7FF;border-radius:10px;padding:16px 24px;margin:0 28px 24px;border:1px solid #D0E3F7;text-align:center">
+      <p style="font-size:16px;color:#555;margin:0 0 12px;font-weight:600">📋 개인통관고유부호가 없으신가요?</p>
+      <a href="https://unipass.customs.go.kr/csp/persIndex.do" target="_blank" style="display:inline-block;background:#1B3A5C;color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:600">
+        관세청 개인통관고유부호 발급 바로가기 →
+      </a>
+    </div>
   </div>
   <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
-    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">반품 / 교환 안내</div>
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">반품 / 교환 기준</div>
     <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
-      · 상품 수령 후 상품에 불량을 발견했을 경우 불량인 부분의 <span style="color:#E8845A;font-weight:600;text-decoration:underline;text-underline-offset:3px">사진과 함께 1:1 문의</span>를 남겨주시기 바랍니다.<br><br>
-      <span style="font-size:20px;font-weight:700;color:#1B3A5C">반품 / 교환 불가 사유</span><br>
-      · 상품, 상품의 구성품, 상품의 본 박스, 밀봉, 태그, 라벨 등의 훼손<br>
-      · 전압에 맞지 않는 변압기 사용으로 인한 내부 고장 등은 반품 불가입니다.<br><br>
-      <span style="font-size:20px;font-weight:700;color:#1B3A5C">반품 / 교환을 원하시는 경우</span><br>
-      · 상품 수령 후 <span style="color:#D94040;font-weight:600">7일 이내</span> 상품과 구성품, 태그, 상품 박스 등의 상품 가치를 훼손하지 않은 수령했던 원상태 그대로 보내주셔야 하며,<br>
-      <span style="color:#D94040;font-weight:600">현지 왕복배송비 + 국내 왕복배송비 + 수입세금 및 제비용이 청구</span>됩니다.
+      상품 수령 후 <span style="color:#D94040;font-weight:600">7일 이내</span>에 신청하실 수 있습니다.
+      단, 제품이 표시·광고 내용과 다르거나 계약과 다르게 이행된 날부터 <b>30일 이내</b>에 교환/반품이 가능합니다.<br><br>
+      <span style="font-size:20px;font-weight:700;color:#1B3A5C">반품 / 교환 불가 사유 (공통)</span><br>
+      · 소비자의 책임 있는 사유로 상품 등이 멸실 또는 훼손된 경우 (단 상품 확인을 위한 포장 훼손 제외)<br>
+      · 소비자의 사용 또는 소비에 의해 상품 등의 가치가 현저히 감소한 경우<br>
+      · 시간 경과에 의해 재판매가 곤란할 정도로 상품 등의 가치가 현저히 감소한 경우<br>
+      · 복제가 가능한 상품 등의 포장을 훼손한 경우<br>
+      · 소비자의 주문에 따라 개별적으로 생산되는 상품이 제작에 들어간 경우<br><br>
+      <span style="font-size:20px;font-weight:700;color:#1B3A5C">저온/신선 상품</span><br>
+      · 고객 귀책 사유 (단순 변심, 주소 오기재, 주문 착오, 보관 부주의 및 상품 사용으로 가치가 하락한 경우 등)<br>
+      · 다른 옵션 상품으로 교환을 요청하는 경우
     </div>
   </div>
   <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
@@ -162,11 +171,68 @@ PA_SECTION_NOTICE = """<div style="background:#1B3A5C;padding:50px 40px 30px;tex
   <div style="font-size:26px;font-weight:700;color:rgba(255,255,255,0.3);letter-spacing:4px">Charis G</div>
 </div>"""
 
-PA_SECTIONS = ["auth", "shipping", "gallery", "notice"]
+PA_SECTION_AMAZON_NOTICE = """<div style="background:linear-gradient(135deg,#232F3E 0%,#37475A 100%);padding:48px 40px 36px;text-align:center">
+  <div style="margin-bottom:20px">
+    <span style="font-size:42px;font-weight:800;color:#FF9900;letter-spacing:-1px">amazon</span>
+    <span style="display:block;width:80px;height:5px;background:#FF9900;border-radius:3px;margin:6px auto 0"></span>
+  </div>
+  <div style="display:inline-block;background:rgba(255,153,0,0.15);border:2px solid rgba(255,153,0,0.4);border-radius:30px;padding:10px 28px;font-size:22px;font-weight:700;color:#fff;margin-bottom:16px">ℹ️ 아마존 상품 안내</div>
+  <p style="font-size:24px;font-weight:600;color:#fff;line-height:1.7;margin:0">
+    아마존 글로벌 스토어에서 판매 중인 상품으로<br>
+    공식 판매자인 <span style="color:#FF9900;font-weight:800">아마존 미국</span>에서 판매/배송을 책임집니다.
+  </p>
+</div>
+<div style="background:#fff;padding:28px 40px;border-left:4px solid #FF9900;border-right:4px solid #FF9900">
+  <div style="background:#FFF8F0;border-radius:14px;padding:24px 28px;margin-bottom:20px;border:1px solid #FFE0B2">
+    <div style="font-size:20px;font-weight:700;color:#232F3E;margin-bottom:10px">
+      <span style="color:#FF9900;font-weight:800;margin-right:8px">amazon</span> 📦 파손 / 오배송 안내
+    </div>
+    <p style="font-size:18px;color:#555;line-height:1.8;margin:0 0 14px">
+      받아보신 상품이 파손 또는 오배송 된 경우 <span style="color:#FF9900;font-weight:600;text-decoration:underline;text-underline-offset:3px">1:1 문의</span>로 사진을 첨부해 주시면<br>
+      불편함 없이 환불받으실 수 있도록 도움드리겠습니다.
+    </p>
+  </div>
+  <!-- 네이버 톡톡 배너 -->
+  <a href="https://talk.naver.com/W8HB1FX" target="_blank" style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-decoration:none;text-align:center;border:1px solid #02A348">
+    <div style="font-size:22px;font-weight:800;color:#fff;margin-bottom:6px">💬 네이버 톡톡 상담</div>
+    <p style="font-size:16px;color:rgba(255,255,255,0.85);margin:0">궁금한 점이 있으시면 톡톡으로 편하게 문의해주세요!</p>
+    <div style="display:inline-block;background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.4);border-radius:20px;padding:6px 20px;margin-top:12px;font-size:14px;font-weight:600;color:#fff">톡톡 문의하기 →</div>
+  </a>
+  <div style="background:#F5F8FC;border-radius:14px;padding:24px 28px;margin-bottom:20px;border:1px solid #D6E4F0">
+    <div style="font-size:20px;font-weight:700;color:#232F3E;margin-bottom:10px">
+      <span style="color:#FF9900;font-weight:800;margin-right:8px">amazon</span> 🌍 해외 상품 안내
+    </div>
+    <p style="font-size:18px;color:#555;line-height:1.8;margin:0">
+      미국 등 해외에서 판매하는 상품으로 <span style="color:#D94040;font-weight:600">사이즈, 사용 연령, 언어, AS</span> 등의 기준이 국내 제품과 다를 수 있습니다.
+    </p>
+  </div>
+  <div style="background:#F0FAF5;border-radius:14px;padding:24px 28px;margin-bottom:20px;border:1px solid #B8E6D0">
+    <div style="font-size:20px;font-weight:700;color:#232F3E;margin-bottom:10px">
+      <span style="color:#FF9900;font-weight:800;margin-right:8px">amazon</span> 🔄 취소 및 반품
+    </div>
+    <div style="font-size:18px;color:#555;line-height:2;margin:0;padding-left:20px">
+      · 결제 완료 후 바로 취소, <span style="color:#D94040;font-weight:600">배송 완료 후 7일 이내</span> 반품 가능<br>
+      · 이후 고객센터를 통해 배송 완료 기준 <span style="font-weight:600">최대 30일 이전</span>까지 반품 신청이 가능합니다.<br>
+      · 상품에 하자가 있는 경우 아마존 한국 고객센터(<span style="color:#FF9900;font-weight:700">1566-7171</span>/유료)로 연락주세요.
+    </div>
+    <div style="background:#E8F5E9;border-radius:10px;padding:14px 18px;margin-top:14px;font-size:16px;color:#666">
+      ℹ️ 배송 규격에 따라서 상품이 분리 배송될 수 있습니다. 분리 배송된 상품을 고객 사유로 반품할 경우, 박스 별 반품 배송비가 부과될 수 있습니다.
+    </div>
+  </div>
+  <div style="background:#F9F9F9;border-radius:14px;padding:18px 28px;border:1px solid #E0E0E0">
+    <p style="font-size:16px;color:#888;line-height:1.7;margin:0">
+      <span style="color:#FF9900;font-weight:800;margin-right:6px">amazon</span>
+      아마존 미국이 판매하는 상품에 대해서는 아마존 글로벌 스토어 판매 조건이 적용됩니다.
+    </p>
+  </div>
+</div>
+<div style="height:5px;background:linear-gradient(90deg,#FF9900,#232F3E)"></div>"""
+
+PA_SECTIONS = ["auth", "shipping", "gallery", "amazon_notice", "notice"]
 
 
 def _build_pa_html(image_urls: list[str]) -> str:
-    """PA 전용 상세페이지 HTML 조립. 순서: 정품→배송→상품이미지→주의사항."""
+    """PA 전용 상세페이지 HTML 조립. 순서: 정품→배송→상품이미지→아마존안내→주의사항."""
     # 상품 이미지 태그 생성
     if image_urls:
         img_tags = "\n".join(
@@ -183,6 +249,7 @@ def _build_pa_html(image_urls: list[str]) -> str:
         PA_SECTION_AUTH,
         PA_SECTION_SHIPPING,
         gallery,
+        PA_SECTION_AMAZON_NOTICE,
         PA_SECTION_NOTICE,
         "</div>",
     ]

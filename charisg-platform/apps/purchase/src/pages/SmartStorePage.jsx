@@ -31,10 +31,18 @@ export default function SmartStorePage() {
     queryFn: pa.smartstoreListings,
   });
   const [previewHtml, setPreviewHtml] = useState(null);
+  const [bulkResult, setBulkResult] = useState(null);
 
   const upload = useMutation({
     mutationFn: (pid) => pa.uploadSmartstore(pid),
     onSettled: () => qc.invalidateQueries({ queryKey: ['pa', 'smartstore', 'listings'] }),
+  });
+
+  const uploadAll = useMutation({
+    mutationFn: () => pa.uploadAllSmartstore(),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['pa', 'smartstore', 'listings'] }),
+    onSuccess: (res) => setBulkResult(res),
+    onError: (e) => setBulkResult({ error: e.message }),
   });
 
   const handlePreview = async (productId) => {
@@ -46,12 +54,38 @@ export default function SmartStorePage() {
     }
   };
 
+  const pendingCount = (data?.items || []).filter((r) => r.status === 'pending').length;
+
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight text-ink-900">스마트스토어</h1>
-        <p className="mt-1 text-sm text-ink-500">네이버 스마트스토어 리스팅 관리 (수수료 5.48%).</p>
+      <header className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-ink-900">스마트스토어</h1>
+          <p className="mt-1 text-sm text-ink-500">네이버 스마트스토어 리스팅 관리 (수수료 5.48%).</p>
+        </div>
+        {pendingCount > 0 && (
+          <Button
+            variant="pa"
+            disabled={uploadAll.isPending}
+            onClick={() => { setBulkResult(null); uploadAll.mutate(); }}
+          >
+            {uploadAll.isPending ? '업로드 중…' : `전체 리스팅 (${pendingCount}건)`}
+          </Button>
+        )}
       </header>
+
+      {bulkResult && (
+        <Card padded>
+          <div className="flex items-center justify-between text-sm">
+            <span>
+              {bulkResult.error
+                ? `오류: ${bulkResult.error}`
+                : `업로드 완료 — 성공 ${bulkResult.uploaded}건, 실패 ${bulkResult.errors}건`}
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => setBulkResult(null)}>닫기</Button>
+          </div>
+        </Card>
+      )}
 
       {previewHtml && (
         <Card title="상세페이지 프리뷰" padded>

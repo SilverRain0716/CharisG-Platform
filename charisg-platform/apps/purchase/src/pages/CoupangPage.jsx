@@ -31,10 +31,18 @@ export default function CoupangPage() {
     queryFn: pa.coupangListings,
   });
   const [previewHtml, setPreviewHtml] = useState(null);
+  const [bulkResult, setBulkResult] = useState(null);
 
   const upload = useMutation({
     mutationFn: (pid) => pa.uploadCoupang(pid),
     onSettled: () => qc.invalidateQueries({ queryKey: ['pa', 'coupang', 'listings'] }),
+  });
+
+  const uploadAll = useMutation({
+    mutationFn: () => pa.uploadAllCoupang(),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['pa', 'coupang', 'listings'] }),
+    onSuccess: (res) => setBulkResult(res),
+    onError: (e) => setBulkResult({ error: e.message }),
   });
 
   const handlePreview = async (productId) => {
@@ -46,12 +54,38 @@ export default function CoupangPage() {
     }
   };
 
+  const pendingCount = (data?.items || []).filter((r) => r.status === 'pending').length;
+
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight text-ink-900">쿠팡</h1>
-        <p className="mt-1 text-sm text-ink-500">쿠팡 마켓플레이스 리스팅 관리 (수수료 13.74%).</p>
+      <header className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-ink-900">쿠팡</h1>
+          <p className="mt-1 text-sm text-ink-500">쿠팡 마켓플레이스 리스팅 관리 (수수료 13.74%).</p>
+        </div>
+        {pendingCount > 0 && (
+          <Button
+            variant="ds"
+            disabled={uploadAll.isPending}
+            onClick={() => { setBulkResult(null); uploadAll.mutate(); }}
+          >
+            {uploadAll.isPending ? '업로드 중…' : `전체 리스팅 (${pendingCount}건)`}
+          </Button>
+        )}
       </header>
+
+      {bulkResult && (
+        <Card padded>
+          <div className="flex items-center justify-between text-sm">
+            <span>
+              {bulkResult.error
+                ? `오류: ${bulkResult.error}`
+                : `업로드 완료 — 성공 ${bulkResult.uploaded}건, 실패 ${bulkResult.errors}건`}
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => setBulkResult(null)}>닫기</Button>
+          </div>
+        </Card>
+      )}
 
       {previewHtml && (
         <Card title="상세페이지 프리뷰" padded>

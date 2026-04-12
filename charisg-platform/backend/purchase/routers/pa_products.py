@@ -94,6 +94,35 @@ def bulk_send_to_channel(body: SendToChannelBody, user: dict = Depends(current_u
     return {"sent": len(results), "errors": len(errors), "error_details": errors}
 
 
+class PriceBody(BaseModel):
+    sale_price_krw: int
+
+
+@router.patch("/{pid}/price")
+def set_price(pid: int, body: PriceBody, user: dict = Depends(current_user)):
+    if body.sale_price_krw < 0:
+        raise HTTPException(400, "판매가는 0 이상이어야 함")
+    with get_db() as conn:
+        row = conn.execute("SELECT cost_usd FROM products WHERE id=?", (pid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "상품 없음")
+        cost_usd = row["cost_usd"] or 0
+        from backend.purchase.services.exchange_rate_service import get_current_rate
+        fx = get_current_rate()
+        cost_krw = cost_usd * fx
+        margin_pct = ((body.sale_price_krw - cost_krw) / body.sale_price_krw * 100) if body.sale_price_krw > 0 else 0
+        conn.execute(
+            """UPDATE products SET sale_price_krw=?, margin_pct=?, updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+            (body.sale_price_krw, round(margin_pct, 1), pid),
+        )
+        conn.execute(
+            """UPDATE listings_pa SET sale_krw=?, net_margin_krw=?, updated_at=CURRENT_TIMESTAMP
+               WHERE product_id=?""",
+            (body.sale_price_krw, int(body.sale_price_krw * margin_pct / 100), pid),
+        )
+    return {"ok": True, "sale_price_krw": body.sale_price_krw, "margin_pct": round(margin_pct, 1)}
+
+
 class StatusBody(BaseModel):
     status: str
 

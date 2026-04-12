@@ -57,6 +57,8 @@ export const pa = {
   // Upload
   uploadSmartstore: (pid) => apiFetch(`/api/pa/smartstore/upload/${pid}`, { method: 'POST' }),
   uploadCoupang:    (pid) => apiFetch(`/api/pa/coupang/upload/${pid}`, { method: 'POST' }),
+  uploadAllSmartstore: () => apiFetch('/api/pa/smartstore/upload-all', { method: 'POST' }),
+  uploadAllCoupang:    () => apiFetch('/api/pa/coupang/upload-all', { method: 'POST' }),
 
   // Orders
   ordersKanban:   () => apiFetch('/api/pa/orders/kanban'),
@@ -83,4 +85,10 @@ export const pa = {
   // Settings
   settings:       () => apiFetch('/api/pa/settings'),
   putSetting:     (key, value) => apiFetch('/api/pa/settings', { method: 'PUT', body: { key, value } }),
+  pricingSettings: () => apiFetch('/api/pa/settings/pricing'),
+  updatePricing:  (body) => apiFetch('/api/pa/settings/pricing', { method: 'PUT', body }),
+
+  // Product price override
+  updateProductPrice: (pid, sale_price_krw) =>
+    apiFetch(`/api/pa/products/${pid}/price`, { method: 'PATCH', body: { sale_price_krw } }),
 };
