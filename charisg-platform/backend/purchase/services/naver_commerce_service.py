@@ -116,15 +116,39 @@ def register_product(payload: dict) -> Optional[dict]:
         return None
 
 
-def update_product(product_no: str, payload: dict) -> Optional[dict]:
-    """상품 수정 (PUT /v2/products/{productNo})."""
+def get_product(product_no: str) -> Optional[dict]:
+    """상품 조회 (GET /v2/products/origin-products/{productNo})."""
     token = _get_token()
     if not token:
         return None
     try:
+        r = requests.get(
+            BASE + f"/v2/products/origin-products/{product_no}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        if r.status_code >= 400:
+            return None
+        return r.json()
+    except Exception:
+        return None
+
+
+def update_product(product_no: str, partial: dict) -> Optional[dict]:
+    """상품 수정 — GET으로 전체 데이터 가져온 뒤 partial 병합 후 PUT."""
+    token = _get_token()
+    if not token:
+        return None
+    current = get_product(product_no)
+    if not current:
+        logger.error(f"네이버 상품 조회 실패 (수정 전): {product_no}")
+        return None
+    for key, val in partial.get("originProduct", {}).items():
+        current["originProduct"][key] = val
+    try:
         r = requests.put(
-            BASE + f"/v2/products/{product_no}",
-            json=payload,
+            BASE + f"/v2/products/origin-products/{product_no}",
+            json=current,
             headers={"Authorization": f"Bearer {token}"},
             timeout=15,
         )
