@@ -1,4 +1,4 @@
-"""기존 상세페이지의 개인통관부호/톡톡 링크를 하이퍼링크로 일괄 수정."""
+"""상세페이지의 <a> 태그를 <div>로 되돌리기 (네이버가 <a> 미지원)."""
 import sqlite3
 import os
 import sys
@@ -16,28 +16,33 @@ def fix_links():
         html = r["html_content"]
         new_html = html
 
-        # 1. 개인통관고유부호: div → a 링크
+        # 개인통관부호: <a> → <div>
         new_html = new_html.replace(
-            '<div style="background:#F0F7FF;border-radius:10px;padding:16px 24px;margin:0 28px 24px;border:1px solid #D0E3F7;text-align:center">',
             '<a href="https://unipass.customs.go.kr/csp/persIndex.do" target="_blank" rel="noopener" style="display:block;background:#F0F7FF;border-radius:10px;padding:16px 24px;margin:0 28px 24px;border:1px solid #D0E3F7;text-align:center;text-decoration:none;cursor:pointer">',
+            '<div style="background:#F0F7FF;border-radius:10px;padding:16px 24px;margin:0 28px 24px;border:1px solid #D0E3F7;text-align:center">',
         )
         new_html = new_html.replace(
-            "unipass.customs.go.kr/per/persIndex.do</p>\n    </div>",
             "unipass.customs.go.kr</p>\n    </a>",
+            'unipass.customs.go.kr</p>\n    </div>',
+        )
+        # URL 스타일 강조
+        new_html = new_html.replace(
+            '<p style="font-size:13px;color:#888;margin:4px 0 0">unipass.customs.go.kr</p>',
+            '<p style="font-size:15px;color:#2B7CE9;font-weight:600;margin:8px 0 0;text-decoration:underline">unipass.customs.go.kr</p>',
         )
 
-        # 2. 네이버 톡톡: div → a 링크
+        # 톡톡: <a> → <div>
         new_html = new_html.replace(
-            '<div style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348">',
             '<a href="https://talk.naver.com/W8HB1FX" target="_blank" rel="noopener" style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348;text-decoration:none;cursor:pointer">',
+            '<div style="background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348">',
         )
         new_html = new_html.replace(
-            '궁금한 점이 있으시면 네이버 톡톡으로 편하게 문의해주세요!',
             '궁금한 점이 있으시면 톡톡을 눌러 편하게 문의해주세요!',
+            '궁금한 점이 있으시면 네이버 톡톡으로 편하게 문의해주세요!',
         )
         new_html = new_html.replace(
-            '스토어 채팅에서 "톡톡 문의" 클릭</div>\n  </div>',
             '톡톡 문의하기 →</div>\n  </a>',
+            '스토어 채팅에서 "톡톡 문의" 클릭</div>\n  </div>',
         )
 
         if new_html != html:
