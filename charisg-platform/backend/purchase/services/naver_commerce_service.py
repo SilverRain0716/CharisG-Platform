@@ -100,3 +100,24 @@ def register_product(payload: dict) -> Optional[dict]:
     except Exception as e:
         logger.error(f"네이버 등록 예외: {e}")
         return None
+
+
+def update_product(product_no: str, payload: dict) -> Optional[dict]:
+    """상품 수정 (PUT /v2/products/{productNo})."""
+    token = _get_token()
+    if not token:
+        return None
+    try:
+        r = requests.put(
+            BASE + f"/v2/products/{product_no}",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        if r.status_code >= 400:
+            logger.error(f"네이버 상품 수정 실패: {r.status_code} {r.text[:200]}")
+            return None
+        return r.json()
+    except Exception as e:
+        logger.error(f"네이버 수정 예외: {e}")
+        return None
