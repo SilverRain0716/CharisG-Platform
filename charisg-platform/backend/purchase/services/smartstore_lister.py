@@ -181,6 +181,16 @@ def list_product(product_id: int) -> dict:
     if not result:
         return {"ok": False, "error": "naver api 호출 실패"}
 
+    if result.get("_skip"):
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE listings_pa SET status='excluded', error_message=?,
+                   last_synced_at=CURRENT_TIMESTAMP
+                   WHERE product_id=? AND channel='smartstore'""",
+                (result["_skip"], product_id),
+            )
+        return {"ok": False, "skip": True, "error": result["_skip"]}
+
     with get_db() as conn:
         conn.execute(
             """UPDATE listings_pa SET channel_product_id=?, status='listed',

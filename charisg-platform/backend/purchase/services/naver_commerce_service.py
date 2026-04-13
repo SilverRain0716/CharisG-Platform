@@ -81,8 +81,15 @@ def upload_image(file_path: str) -> Optional[str]:
         return None
 
 
+SKIP_ERROR_TYPES = {
+    "NotAuthority.product.category.id",
+    "Empty.product.detailAttribute.certificationInfos.kindType",
+    "book.CheckValidationIsbn13",
+}
+
+
 def register_product(payload: dict) -> Optional[dict]:
-    """상품 등록 (POST /v1/products)."""
+    """상품 등록 (POST /v2/products). 스킵 대상 에러 시 {"_skip": reason} 반환."""
     token = _get_token()
     if not token:
         return None
@@ -94,6 +101,13 @@ def register_product(payload: dict) -> Optional[dict]:
             timeout=15,
         )
         if r.status_code >= 400:
+            body = r.json() if r.text else {}
+            inputs = body.get("invalidInputs") or []
+            skip_reasons = [i["message"] for i in inputs if i.get("type") in SKIP_ERROR_TYPES]
+            if skip_reasons:
+                reason = skip_reasons[0]
+                logger.warning(f"네이버 등록 스킵 (카테고리 제한): {reason}")
+                return {"_skip": reason}
             logger.error(f"네이버 상품 등록 실패: {r.status_code} {r.text[:200]}")
             return None
         return r.json()

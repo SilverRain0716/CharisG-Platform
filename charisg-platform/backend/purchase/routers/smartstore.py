@@ -97,6 +97,7 @@ def _get_running_upload(channel: str) -> dict | None:
 async def _run_upload_background(job_id: str, product_ids: list[int], channel: str):
     processed = 0
     errors = 0
+    skipped = 0
 
     with get_db() as conn:
         conn.execute(
@@ -107,10 +108,14 @@ async def _run_upload_background(job_id: str, product_ids: list[int], channel: s
     for pid in product_ids:
         try:
             res = list_product(pid)
-            if not res.get("ok"):
+            if res.get("skip"):
+                skipped += 1
+                logger.info(f"[{channel}-upload-all] product {pid} 제외: {res.get('error')}")
+            elif not res.get("ok"):
                 raise ValueError(res.get("error", "업로드 실패"))
-            mark_images_for_deletion(pid)
-            processed += 1
+            else:
+                mark_images_for_deletion(pid)
+                processed += 1
         except Exception as e:
             errors += 1
             logger.warning(f"[{channel}-upload-all] product {pid} 실패: {e}")
@@ -128,7 +133,7 @@ async def _run_upload_background(job_id: str, product_ids: list[int], channel: s
                current_product_id=NULL WHERE id=?""",
             (processed, errors, _now_iso(), job_id),
         )
-    logger.info(f"[{channel}-upload-all] 완료 — 성공 {processed}, 실패 {errors}/{len(product_ids)}")
+    logger.info(f"[{channel}-upload-all] 완료 — 성공 {processed}, 제외 {skipped}, 실패 {errors}/{len(product_ids)}")
 
 
 @router.get("/preview/{product_id}")
