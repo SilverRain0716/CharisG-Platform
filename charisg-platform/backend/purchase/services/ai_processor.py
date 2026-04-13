@@ -192,7 +192,7 @@ PA_SECTION_AMAZON_NOTICE = """<div style="background:linear-gradient(135deg,#232
     </p>
   </div>
   <!-- 네이버 톡톡 배너 -->
-  <a href="https://talk.naver.com/ct/wc4u1w" target="_blank" rel="noopener" style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348;text-decoration:none;cursor:pointer">
+  <a href="https://talk.naver.com/W8HB1FX" target="_blank" rel="noopener" style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348;text-decoration:none;cursor:pointer">
     <div style="font-size:22px;font-weight:800;color:#fff;margin-bottom:6px">💬 네이버 톡톡 상담</div>
     <p style="font-size:16px;color:rgba(255,255,255,0.85);margin:0">궁금한 점이 있으시면 톡톡을 눌러 편하게 문의해주세요!</p>
     <div style="display:inline-block;background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.4);border-radius:20px;padding:6px 20px;margin-top:12px;font-size:14px;font-weight:600;color:#fff">톡톡 문의하기 →</div>

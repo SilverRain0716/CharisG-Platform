@@ -29,7 +29,7 @@ def fix_links():
         # 2. 네이버 톡톡: div → a 링크
         new_html = new_html.replace(
             '<div style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348">',
-            '<a href="https://talk.naver.com/ct/wc4u1w" target="_blank" rel="noopener" style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348;text-decoration:none;cursor:pointer">',
+            '<a href="https://talk.naver.com/W8HB1FX" target="_blank" rel="noopener" style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348;text-decoration:none;cursor:pointer">',
         )
         new_html = new_html.replace(
             '궁금한 점이 있으시면 네이버 톡톡으로 편하게 문의해주세요!',
