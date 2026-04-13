@@ -136,11 +136,11 @@ PA_SECTION_NOTICE = """<div style="background:#1B3A5C;padding:50px 40px 30px;tex
       <span style="font-size:16px;color:#999">*3가지 중 하나라도 맞지 않는다면 통관이 되지 않습니다.</span><br>
       <span style="font-size:16px;color:#999">*개인통관고유부호 발급 당시의 성함과 연락처 등의 정보가 바뀐 경우는 변경 &amp; 재발급을 부탁드립니다.</span>
     </div>
-    <div style="background:#F0F7FF;border-radius:10px;padding:16px 24px;margin:0 28px 24px;border:1px solid #D0E3F7;text-align:center">
+    <a href="https://unipass.customs.go.kr/csp/persIndex.do" target="_blank" rel="noopener" style="display:block;background:#F0F7FF;border-radius:10px;padding:16px 24px;margin:0 28px 24px;border:1px solid #D0E3F7;text-align:center;text-decoration:none;cursor:pointer">
       <p style="font-size:16px;color:#555;margin:0 0 8px;font-weight:600">📋 개인통관고유부호가 없으신가요?</p>
       <p style="font-size:14px;color:#1B3A5C;font-weight:600;margin:0">관세청 개인통관고유부호 발급 바로가기 →</p>
-      <p style="font-size:13px;color:#888;margin:4px 0 0">unipass.customs.go.kr/per/persIndex.do</p>
-    </div>
+      <p style="font-size:13px;color:#888;margin:4px 0 0">unipass.customs.go.kr</p>
+    </a>
   </div>
   <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
     <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">반품 / 교환 기준</div>
@@ -192,11 +192,11 @@ PA_SECTION_AMAZON_NOTICE = """<div style="background:linear-gradient(135deg,#232
     </p>
   </div>
   <!-- 네이버 톡톡 배너 -->
-  <div style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348">
+  <a href="https://talk.naver.com/ct/wc4u1w" target="_blank" rel="noopener" style="display:block;background:linear-gradient(135deg,#03C75A 0%,#02B550 100%);border-radius:14px;padding:24px 28px;margin-bottom:20px;text-align:center;border:1px solid #02A348;text-decoration:none;cursor:pointer">
     <div style="font-size:22px;font-weight:800;color:#fff;margin-bottom:6px">💬 네이버 톡톡 상담</div>
-    <p style="font-size:16px;color:rgba(255,255,255,0.85);margin:0">궁금한 점이 있으시면 네이버 톡톡으로 편하게 문의해주세요!</p>
-    <div style="display:inline-block;background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.4);border-radius:20px;padding:6px 20px;margin-top:12px;font-size:14px;font-weight:600;color:#fff">스토어 채팅에서 "톡톡 문의" 클릭</div>
-  </div>
+    <p style="font-size:16px;color:rgba(255,255,255,0.85);margin:0">궁금한 점이 있으시면 톡톡을 눌러 편하게 문의해주세요!</p>
+    <div style="display:inline-block;background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.4);border-radius:20px;padding:6px 20px;margin-top:12px;font-size:14px;font-weight:600;color:#fff">톡톡 문의하기 →</div>
+  </a>
   <div style="background:#F5F8FC;border-radius:14px;padding:24px 28px;margin-bottom:20px;border:1px solid #D6E4F0">
     <div style="font-size:20px;font-weight:700;color:#232F3E;margin-bottom:10px">
       <span style="color:#FF9900;font-weight:800;margin-right:8px">amazon</span> 🌍 해외 상품 안내
