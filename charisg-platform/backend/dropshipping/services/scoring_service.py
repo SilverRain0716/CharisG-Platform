@@ -219,16 +219,33 @@ def get_hard_filter_products() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def run_scoring_pipeline(use_trends: bool = True) -> list[dict]:
-    """Step 1~4 통합 파이프라인 실행
+def run_scoring_pipeline(
+    use_trends: bool = True,
+    collect_cj: bool = True,
+    progress_cb=None,
+) -> list[dict]:
+    """Step 0~4 통합 파이프라인 실행 (스펙 기준: 수집 → 필터 → 스코어)
 
     Args:
         use_trends: Google Trends 조회 여부 (False면 fallback 0.4 사용)
+        collect_cj: CJ 전수 수집 실행 여부 (True면 먼저 수집)
+        progress_cb: callable(phase, current, total, message) — 진행률 콜백
 
     Returns:
         스코어링 완료된 상품 리스트 (sort_score 내림차순)
     """
+    # Step 0: CJ 전수 수집 (스펙: CJ 38K → Collected 6.2K → Hard Filter 335)
+    if collect_cj:
+        from backend.dropshipping.services import cj_service
+        logger.info("Step 0: CJ 카탈로그 전수 수집 시작")
+        if progress_cb:
+            progress_cb("collect", 0, 1, "CJ 카탈로그 수집 시작")
+        stats = cj_service.collect_full_catalog(progress_cb=progress_cb)
+        logger.info(f"Step 0: CJ 수집 완료 — {stats}")
+
     # Step 1: Hard Filter 통과 상품
+    if progress_cb:
+        progress_cb("score", 0, 1, "Hard Filter 통과 상품 조회")
     products = get_hard_filter_products()
     if not products:
         logger.warning("Hard Filter 통과 상품 없음")

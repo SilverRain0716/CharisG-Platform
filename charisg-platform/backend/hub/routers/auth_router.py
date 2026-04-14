@@ -14,7 +14,7 @@ from backend.hub.auth import (
     store_session,
 )
 from backend.hub.database import get_db
-from backend_shared._config import JWT_EXPIRE_HOURS
+from backend_shared._config import AUTH_BYPASS, JWT_EXPIRE_HOURS
 
 router = APIRouter(prefix="/api/hub/auth", tags=["hub-auth"])
 
@@ -79,6 +79,14 @@ def logout(request: Request, response: Response):
 
 @router.get("/me")
 def me(user: dict = Depends(current_user)):
+    if AUTH_BYPASS:
+        return UserResponse(
+            id=user.get("id", 0),
+            username=user.get("username", "admin"),
+            role=user.get("role", "owner"),
+            email=None,
+            name="개발자",
+        ).model_dump()
     with get_db() as conn:
         row = conn.execute(
             "SELECT id, username, role, email, name FROM users WHERE id=?",

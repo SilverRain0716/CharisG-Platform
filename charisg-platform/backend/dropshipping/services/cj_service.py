@@ -147,6 +147,228 @@ def search_products(
     return results
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 카테고리 트리 기반 전수 수집
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def get_category_tree() -> list[dict]:
+    """CJ 카테고리 트리 조회 → leaf 카테고리(Level 3) 리스트 반환.
+
+    Returns: [{"id": categoryId, "name": full_path, "level1": ..., "level2": ..., "level3": ...}]
+    """
+    token = _get_token()
+    if not token:
+        return []
+
+    try:
+        resp = requests.get(
+            f"{CJ_API_BASE}/product/getCategory",
+            headers={"CJ-Access-Token": token},
+            timeout=15,
+        )
+        data = resp.json()
+        if not data.get("result"):
+            logger.error(f"CJ 카테고리 조회 실패: {data.get('message')}")
+            return []
+    except Exception as e:
+        logger.error(f"CJ 카테고리 오류: {e}")
+        return []
+
+    leaves = []
+    for cat1 in data.get("data", []):
+        l1_name = cat1.get("categoryFirstName", "")
+        for cat2 in cat1.get("categoryFirstList", []):
+            l2_name = cat2.get("categorySecondName", "")
+            for leaf in cat2.get("categorySecondList", []):
+                leaves.append({
+                    "id": leaf.get("categoryId", ""),
+                    "name": f"{l1_name} > {l2_name} > {leaf.get('categoryName', '')}",
+                    "level1": l1_name,
+                    "level2": l2_name,
+                    "level3": leaf.get("categoryName", ""),
+                })
+    logger.info(f"CJ 카테고리 트리: leaf {len(leaves)}개")
+    return leaves
+
+
+# 소싱 대상에서 제외할 Level 1 카테고리 (스펙 Hard Filter 8번)
+EXCLUDED_LEVEL1 = {
+    "Women's Clothing",
+    "Men's Clothing",
+    "Kids & Baby Clothing",
+    "Shoes",
+    "Health, Beauty & Hair",  # Health 관련
+    "Wedding & Events",        # 의류 계열
+}
+
+
+def search_by_category(
+    category_id: str,
+    page: int = 1,
+    page_size: int = 50,
+    country_code: str = "US",
+) -> tuple[list[dict], int]:
+    """단일 카테고리의 한 페이지 조회.
+
+    Returns: (raw_items, total_count)
+    """
+    token = _get_token()
+    if not token:
+        return [], 0
+
+    try:
+        time.sleep(0.5)
+        resp = requests.get(
+            f"{CJ_API_BASE}/product/list",
+            headers={"CJ-Access-Token": token},
+            params={
+                "categoryId": category_id,
+                "pageNum": page,
+                "pageSize": page_size,
+                "countryCode": country_code,
+            },
+            timeout=20,
+        )
+        data = resp.json()
+        if not data.get("result"):
+            return [], 0
+        raw = data.get("data", {}) or {}
+        return raw.get("list", []) or [], int(raw.get("total", 0))
+    except Exception as e:
+        logger.error(f"CJ 카테고리 조회 오류 ({category_id}): {e}")
+        return [], 0
+
+
+def collect_full_catalog(
+    progress_cb=None,
+    max_pages_per_category: int = 10,
+    page_size: int = 50,
+    skip_excluded: bool = True,
+) -> dict:
+    """CJ US 창고 전체 카탈로그 수집 → collected_products 저장.
+
+    스펙: CJ 38K → Collected 6.2K → Hard Filter 335
+    단계:
+      1) 카테고리 트리 조회 (~539 leaf)
+      2) 제외 카테고리 스킵 (Clothing/Health)
+      3) 각 leaf 카테고리 페이지네이션 순회 (US 창고만)
+      4) _parse_product 로 Hard Filter 적용 → pass인 것만 저장
+
+    Args:
+        progress_cb: callable(phase, current, total, message) — 진행률 콜백
+        max_pages_per_category: 카테고리당 최대 페이지
+        page_size: 페이지당 상품 수 (최대 50)
+        skip_excluded: Clothing/Health 등 제외 카테고리 스킵 여부
+
+    Returns:
+        {"categories": int, "raw_collected": int, "filter_passed": int, "saved": int}
+    """
+    from backend.dropshipping.database import get_db
+
+    token = _get_token()
+    if not token:
+        logger.error("CJ 토큰 발급 실패 — 전수 수집 중단")
+        return {"categories": 0, "raw_collected": 0, "filter_passed": 0, "saved": 0}
+
+    categories = get_category_tree()
+    if not categories:
+        logger.error("CJ 카테고리 트리 조회 실패")
+        return {"categories": 0, "raw_collected": 0, "filter_passed": 0, "saved": 0}
+
+    if skip_excluded:
+        categories = [c for c in categories if c["level1"] not in EXCLUDED_LEVEL1]
+
+    total_cats = len(categories)
+    raw_collected = 0
+    filter_passed = 0
+    saved = 0
+
+    if progress_cb:
+        progress_cb("collect", 0, total_cats, f"카테고리 {total_cats}개 수집 시작")
+
+    for idx, cat in enumerate(categories, 1):
+        cat_id = cat["id"]
+        cat_label = cat["name"]
+
+        if progress_cb and idx % 10 == 0:
+            progress_cb("collect", idx, total_cats, f"{cat_label[:40]}")
+
+        for page in range(1, max_pages_per_category + 1):
+            raw_list, total = search_by_category(cat_id, page=page, page_size=page_size)
+            if not raw_list:
+                break
+            raw_collected += len(raw_list)
+
+            for raw in raw_list:
+                item = _parse_product(
+                    raw, cat["level3"], token,
+                    DEFAULT_PRICE_MIN, DEFAULT_PRICE_MAX, DEFAULT_MARGIN_MIN,
+                )
+                if not item:
+                    continue  # Hard Filter 탈락 (log_filter_fail에서 DB 저장됨)
+                filter_passed += 1
+
+                # DB 저장
+                try:
+                    with get_db() as conn:
+                        existing = conn.execute(
+                            "SELECT id FROM collected_products WHERE external_id=? AND source='cj'",
+                            (item["pid"],),
+                        ).fetchone()
+                        if existing:
+                            conn.execute(
+                                """UPDATE collected_products
+                                   SET product_name=?, calculated_price=?, source_price=?,
+                                       shipping_cost=?, real_margin_pct=?, stock_quantity=?,
+                                       weight_g=?, image_count=?, hard_filter_pass=1,
+                                       filter_fail_reason=NULL, us_warehouse=1,
+                                       status='collected', category=?, updated_at=CURRENT_TIMESTAMP
+                                   WHERE id=?""",
+                                (item["name"], item["suggest_price"], item["sell_price"],
+                                 item["ship_cost"], item["margin_pct"], item["inventory"],
+                                 item["weight_g"], item["image_count"],
+                                 cat["level3"], existing["id"]),
+                            )
+                        else:
+                            conn.execute(
+                                """INSERT INTO collected_products
+                                   (source, business_model, external_id, url, product_name, category,
+                                    source_price, source_currency, calculated_price, shipping_cost,
+                                    real_margin_pct, stock_quantity, weight_g, image_count,
+                                    hard_filter_pass, filter_fail_reason, status,
+                                    us_warehouse, processing_status, collected_at)
+                                   VALUES ('cj','dropship',?,?,?,?,?,'USD',?,?,?,?,?,?,1,NULL,
+                                           'collected',1,'raw',CURRENT_TIMESTAMP)""",
+                                (item["pid"], item["url"], item["name"], cat["level3"],
+                                 item["sell_price"], item["suggest_price"], item["ship_cost"],
+                                 item["margin_pct"], item["inventory"], item["weight_g"],
+                                 item["image_count"]),
+                            )
+                            saved += 1
+                except Exception as e:
+                    logger.debug(f"CJ 저장 실패 ({item['pid']}): {e}")
+
+            # 페이지 간 딜레이 (Rate Limit 대응)
+            if len(raw_list) < page_size:
+                break  # 마지막 페이지 도달
+            time.sleep(0.8)
+
+        # 카테고리 간 딜레이
+        time.sleep(1.2)
+
+    if progress_cb:
+        progress_cb("collect", total_cats, total_cats,
+                    f"수집 완료: raw={raw_collected}, pass={filter_passed}, saved={saved}")
+
+    logger.info(f"CJ 전수 수집 완료: 카테고리 {total_cats}, raw {raw_collected}, "
+                f"pass {filter_passed}, saved {saved}")
+    return {
+        "categories": total_cats,
+        "raw_collected": raw_collected,
+        "filter_passed": filter_passed,
+        "saved": saved,
+    }
+
+
 def search_by_keywords(
     keywords: list[str],
     max_per_keyword: int = 20,

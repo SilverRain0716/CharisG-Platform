@@ -28,10 +28,11 @@ export function GlobalTopBar({
   onLogout,
   notifications = 0,
 }) {
+  const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
   const tabs = [
-    { id: 'hub',          label: 'Hub',           href: '/' },
-    { id: 'dropshipping', label: 'Dropshipping',  href: '/dropshipping/', badge: summary.ds?.pendingCount },
-    { id: 'purchase',     label: 'Purchase Agent', href: '/purchase/',     badge: summary.pa?.pendingCount },
+    { id: 'hub',          label: 'Hub',           href: isDev ? 'http://localhost:3000/' : '/' },
+    { id: 'dropshipping', label: 'Dropshipping',  href: isDev ? 'http://localhost:3001/dropshipping/' : '/dropshipping/', badge: summary.ds?.pendingCount },
+    { id: 'purchase',     label: 'Purchase Agent', href: isDev ? 'http://localhost:3002/purchase/' : '/purchase/',     badge: summary.pa?.pendingCount },
   ];
 
   return (

@@ -42,11 +42,17 @@ class RunRequest(BaseModel):
 
 @router.post("/run")
 def run_crawler(req: RunRequest, background: BackgroundTasks, user: dict = Depends(current_user)):
+    """크롤러 실행. CJ 전수 수집은 스코어링 파이프라인에서 일괄 처리됩니다."""
     if req.crawler == "amazon":
         kws = req.keywords or amazon_keyword_crawler.get_keywords_from_go_products(req.limit or 50)
         background.add_task(amazon_keyword_crawler.crawl_keywords, kws)
         return {"started": True, "crawler": "amazon", "keyword_count": len(kws)}
-    return {"started": False, "message": f"{req.crawler} 크롤러는 EC2 측 GitHub Actions/cron 에서 실행됩니다"}
+    if req.crawler == "cj":
+        return {
+            "started": False,
+            "message": "CJ 전수 수집은 스코어링 > 실행 버튼에서 일괄 트리거됩니다 (스펙 기준)",
+        }
+    return {"started": False, "message": f"{req.crawler} 크롤러 미지원"}
 
 
 @router.get("/logs")

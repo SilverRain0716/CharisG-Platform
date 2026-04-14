@@ -13,11 +13,15 @@ router = APIRouter(prefix="/api/ds/fees", tags=["ds-fees"])
 @router.get("/categories")
 def list_categories(user: dict = Depends(current_user)):
     """전체 카테고리 → fee 매핑 (amazon_fee_service 내부 데이터)."""
-    try:
-        from backend.dropshipping.services.amazon_fee_service import REFERRAL_FEES
-        return [{"category": k, "fee_pct": v} for k, v in REFERRAL_FEES.items()]
-    except ImportError:
-        raise HTTPException(500, "amazon_fee_service.REFERRAL_FEES 누락 — 모노리스에서 import 확인 필요")
+    from backend.dropshipping.services.amazon_fee_service import AMAZON_FEE_TABLE
+    return [
+        {
+            "category": k,
+            "fee_pct": round(v.get("rate", 0) * 100, 2),
+            "tier": v.get("tier"),
+        }
+        for k, v in AMAZON_FEE_TABLE.items()
+    ]
 
 
 @router.get("/category")

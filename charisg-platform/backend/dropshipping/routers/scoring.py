@@ -1,4 +1,8 @@
 """DS Scoring — 3×3 히트맵, 분포, 실행, 이력."""
+import threading
+import time as _time
+from datetime import datetime
+
 from fastapi import APIRouter, BackgroundTasks, Depends
 
 from backend.dropshipping.auth import current_user
@@ -6,6 +10,53 @@ from backend.dropshipping.database import get_db
 from backend.dropshipping.services import scoring_service
 
 router = APIRouter(prefix="/api/ds/scoring", tags=["ds-scoring"])
+
+# 파이프라인 진행 상태 (in-memory)
+_pipeline_state: dict = {
+    "running": False,
+    "phase": "idle",      # idle | collect | score | done | error
+    "current": 0,
+    "total": 0,
+    "message": "",
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+}
+_pipeline_lock = threading.Lock()
+
+
+def _progress_cb(phase: str, current: int, total: int, message: str):
+    with _pipeline_lock:
+        _pipeline_state["phase"] = phase
+        _pipeline_state["current"] = current
+        _pipeline_state["total"] = total
+        _pipeline_state["message"] = message
+
+
+def _run_pipeline_bg(collect_cj: bool, use_trends: bool):
+    with _pipeline_lock:
+        _pipeline_state.update({
+            "running": True, "phase": "collect", "current": 0, "total": 0,
+            "message": "시작 중", "started_at": datetime.utcnow().isoformat(),
+            "finished_at": None, "error": None,
+        })
+    try:
+        scoring_service.run_scoring_pipeline(
+            use_trends=use_trends,
+            collect_cj=collect_cj,
+            progress_cb=_progress_cb,
+        )
+        with _pipeline_lock:
+            _pipeline_state.update({
+                "running": False, "phase": "done",
+                "message": "완료", "finished_at": datetime.utcnow().isoformat(),
+            })
+    except Exception as e:
+        with _pipeline_lock:
+            _pipeline_state.update({
+                "running": False, "phase": "error", "error": str(e),
+                "finished_at": datetime.utcnow().isoformat(),
+            })
 
 
 @router.get("/matrix")
@@ -72,9 +123,21 @@ def get_filter_fails(user: dict = Depends(current_user)):
 
 
 @router.post("/run")
-def run_scoring(background: BackgroundTasks, user: dict = Depends(current_user)):
-    background.add_task(scoring_service.run_scoring_pipeline, True)
-    return {"started": True, "message": "스코어링 파이프라인 백그라운드 실행 중"}
+def run_scoring(background: BackgroundTasks, collect_cj: bool = True,
+                use_trends: bool = True, user: dict = Depends(current_user)):
+    """스펙 기준 통합 파이프라인: CJ 수집 → Hard Filter → 3축 스코어링."""
+    with _pipeline_lock:
+        if _pipeline_state["running"]:
+            return {"started": False, "message": "이미 파이프라인 실행 중", "state": dict(_pipeline_state)}
+    background.add_task(_run_pipeline_bg, collect_cj, use_trends)
+    return {"started": True, "message": "CJ 수집 + 스코어링 파이프라인 백그라운드 실행 시작"}
+
+
+@router.get("/progress")
+def get_progress(user: dict = Depends(current_user)):
+    """파이프라인 진행 상태 폴링."""
+    with _pipeline_lock:
+        return dict(_pipeline_state)
 
 
 @router.get("/report")
