@@ -1,0 +1,39 @@
+# env
+.env
+.env.local
+.env.*.local
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.eggs/
+
+# node
+node_modules/
+.pnpm-store/
+dist/
+build/
+.vite/
+
+# sqlite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
