@@ -78,7 +78,7 @@ export default function App() {
           onLogoClick={() => (window.location.href = '/')}
         />
         <div className="mx-auto flex max-w-[1600px]">
-          <div className="sticky top-14 flex h-[calc(100vh-3.5rem)] w-60 shrink-0 flex-col border-r border-ink-200 bg-white">
+          <aside className="sticky top-14 h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r border-ink-200 bg-white">
             {/* 마켓 선택기 */}
             <div className="px-3 py-3 border-b border-ink-200">
               <label className="block text-xs font-medium text-ink-500 mb-1">마켓플레이스</label>
@@ -114,10 +114,10 @@ export default function App() {
                 ))}
               </ul>
             </nav>
-          </div>
-          <main className="flex-1 px-6 py-8">
+          </aside>
+          <main className="min-w-0 flex-1 px-6 py-8">
             <div className="mb-4 flex items-center gap-2">
-              <span className="text-2xl">{marketInfo.flag}</span>
+              <span className="text-lg">{marketInfo.flag}</span>
               <span className="text-sm font-medium text-ink-500">
                 Amazon {marketInfo.label}
               </span>
