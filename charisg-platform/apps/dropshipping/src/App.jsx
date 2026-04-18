@@ -78,7 +78,7 @@ export default function App() {
           onLogoClick={() => (window.location.href = '/')}
         />
         <div className="mx-auto flex max-w-[1600px]">
-          <div className="w-52 shrink-0">
+          <div className="sticky top-14 flex h-[calc(100vh-3.5rem)] w-60 shrink-0 flex-col border-r border-ink-200 bg-white">
             {/* 마켓 선택기 */}
             <div className="px-3 py-3 border-b border-ink-200">
               <label className="block text-xs font-medium text-ink-500 mb-1">마켓플레이스</label>
@@ -94,14 +94,26 @@ export default function App() {
                 ))}
               </select>
             </div>
-            <Sidebar
-              theme="ds"
-              items={items}
-              onSelect={(id) => {
-                const item = items.find((i) => i.id === id);
-                if (item) navigate(item.href);
-              }}
-            />
+            {/* 네비게이션 */}
+            <nav className="flex-1 overflow-y-auto p-3">
+              <ul className="space-y-1">
+                {items.map((it) => (
+                  <li key={it.id}>
+                    <a
+                      href={it.href}
+                      onClick={(e) => { e.preventDefault(); navigate(it.href); }}
+                      className={`group flex items-center gap-3 rounded-md border-l-2 px-3 py-2 text-sm font-medium ${
+                        it.active
+                          ? 'border-brand-ds-500 bg-brand-ds-50 text-brand-ds-700'
+                          : 'border-transparent text-ink-600 hover:bg-ink-100 hover:text-ink-900'
+                      }`}
+                    >
+                      <span className="flex-1">{it.label}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
           </div>
           <main className="flex-1 px-6 py-8">
             <div className="mb-4 flex items-center gap-2">
