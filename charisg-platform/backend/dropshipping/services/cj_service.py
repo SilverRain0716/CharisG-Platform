@@ -321,13 +321,15 @@ def collect_full_catalog(
                                    SET product_name=?, calculated_price=?, source_price=?,
                                        shipping_cost=?, real_margin_pct=?, stock_quantity=?,
                                        weight_g=?, image_count=?, hard_filter_pass=1,
-                                       filter_fail_reason=NULL, us_warehouse=1,
+                                       filter_fail_reason=NULL,
+                                       us_warehouse=?, warehouse_country=?,
                                        status = CASE WHEN status IN ('listed','active') THEN status ELSE 'collected' END,
                                        category=?, updated_at=CURRENT_TIMESTAMP
                                    WHERE id=?""",
                                 (item["name"], item["suggest_price"], item["sell_price"],
                                  item["ship_cost"], item["margin_pct"], item["inventory"],
                                  item["weight_g"], item["image_count"],
+                                 int(item["us_warehouse"]), item["warehouse_country"],
                                  cat["level3"], existing["id"]),
                             )
                         else:
@@ -337,13 +339,14 @@ def collect_full_catalog(
                                     source_price, source_currency, calculated_price, shipping_cost,
                                     real_margin_pct, stock_quantity, weight_g, image_count,
                                     hard_filter_pass, filter_fail_reason, status,
-                                    us_warehouse, processing_status, collected_at)
+                                    us_warehouse, warehouse_country, processing_status, collected_at)
                                    VALUES ('cj','dropship',?,?,?,?,?,'USD',?,?,?,?,?,?,1,NULL,
-                                           'collected',1,'raw',CURRENT_TIMESTAMP)""",
+                                           'collected',?,?,'raw',CURRENT_TIMESTAMP)""",
                                 (item["pid"], item["url"], item["name"], cat["level3"],
                                  item["sell_price"], item["suggest_price"], item["ship_cost"],
                                  item["margin_pct"], item["inventory"], item["weight_g"],
-                                 item["image_count"]),
+                                 item["image_count"],
+                                 int(item["us_warehouse"]), item["warehouse_country"]),
                             )
                             saved += 1
                 except Exception as e:
@@ -395,14 +398,21 @@ def search_by_keywords(
     return all_results
 
 
-def get_shipping_cost(product_sku: str) -> float:
-    """US→US 배송비 조회. 실패 시 $4.99 기본값."""
+def get_shipping_cost(
+    product_sku: str,
+    warehouse_country: str = "US",
+    dest_country: str = "US",
+) -> float:
+    """창고→목적지 배송비 조회. 실패 시 기본값 반환."""
+    from backend.dropshipping.services.marketplace_config import get_default_ship_cost
+    default = get_default_ship_cost("US", warehouse_country)
+
     if not product_sku:
-        return 4.99
+        return default
 
     token = _get_token()
     if not token:
-        return 4.99
+        return default
 
     try:
         time.sleep(0.5)
@@ -410,8 +420,8 @@ def get_shipping_cost(product_sku: str) -> float:
             f"{CJ_API_BASE}/logistic/freightCalculate",
             headers={"CJ-Access-Token": token},
             json={
-                "startCountryCode": "US",
-                "endCountryCode": "US",
+                "startCountryCode": warehouse_country,
+                "endCountryCode": dest_country,
                 "products": [{"skuId": product_sku, "quantity": 1}],
             },
             timeout=15,
@@ -419,11 +429,11 @@ def get_shipping_cost(product_sku: str) -> float:
         data = resp.json()
         if data.get("result") and data.get("data"):
             cheapest = min(data["data"], key=lambda x: float(x.get("logisticPrice", 999)))
-            return float(cheapest.get("logisticPrice", 4.99))
+            return float(cheapest.get("logisticPrice", default))
     except Exception:
         pass
 
-    return 4.99
+    return default
 
 
 def get_product_detail(pid: str) -> Optional[dict]:
@@ -494,13 +504,16 @@ def _parse_product(
 
         # ═══ Hard Filter (탈락 사유 기록) ═══
 
-        # [1] US 창고 필터
-        us_warehouse = any(
-            "US" in str(w.get("countryCode", "")).upper()
+        # [1] 창고 필터: US 또는 CN 중 하나 이상 필요 (US 우선)
+        warehouses = [
+            str(w.get("countryCode", "")).upper()
             for w in raw.get("sourceWarehouse", [])
-        )
-        if not us_warehouse:
-            _log_filter_fail(pid, product_name, keyword, sell_price, suggest_price, "no_us_warehouse")
+        ]
+        us_warehouse = "US" in warehouses
+        cn_warehouse = "CN" in warehouses
+        warehouse_country = "US" if us_warehouse else ("CN" if cn_warehouse else None)
+        if not warehouse_country:
+            _log_filter_fail(pid, product_name, keyword, sell_price, suggest_price, "no_us_cn_warehouse")
             return None
 
         # [3] 재고 ≥ 10
@@ -527,7 +540,7 @@ def _parse_product(
             return None
 
         # 배송비
-        ship_cost = get_shipping_cost(sku)
+        ship_cost = get_shipping_cost(sku, warehouse_country=warehouse_country)
 
         # [2] 마진 계산 (Amazon Referral Fee 반영) ≥ 25%
         margin_pct = calc_real_margin(
@@ -556,6 +569,7 @@ def _parse_product(
             "margin_pct": margin_pct,
             "inventory": inventory,
             "us_warehouse": us_warehouse,
+            "warehouse_country": warehouse_country,
             "weight_g": weight_g,
             "image_count": image_count,
             "hard_filter_pass": True,
