@@ -1,12 +1,13 @@
 """
 asin_matching_service.py — CJ 상품 → Amazon ASIN 매칭 서비스.
 
-최적화 v2:
+최적화 v3:
 - 키워드 추출: 핵심 명사만 추출, 색상/수량/수식어 제거
 - 유사도: CJ 토큰 기준 recall (Amazon이 CJ 키워드를 얼마나 포함하는지)
 - 다중 검색: 전체 키워드 → 핵심 3단어 fallback
 - 가격: amazon_search_agg 테이블에서 키워드별 중위가 활용
 - 속도: CatalogItems 클라이언트 싱글턴, DB 배치 쓰기
+- ★ v3: 브랜드/카테고리 사전 필터 — 등록 불가 ASIN 사전 제거
 """
 import logging
 import re
@@ -34,6 +35,49 @@ MARKETPLACE_ID = "ATVPDKIKX0DER"
 # 매칭 임계값
 MATCH_THRESHOLD_STRONG = 0.55
 MATCH_THRESHOLD_MODERATE = 0.35
+
+# ── Amazon 등록 제한 필터 (v3) ─────────────────────
+# 브랜드 등록된 ASIN은 brand owner만 리스팅 가능 → 이 브랜드가 아닌 것만 허용
+_SAFE_BRANDS = {"", "generic", "unbranded", "no brand", "nobrand"}
+
+# Amazon 승인 필요 카테고리 — 정확한 구문 매칭 (단어 단독 사용 시 오탐 방지)
+_RESTRICTED_CATEGORY_PHRASES = [
+    # 살충제/농약 (EPA 등록 + 미국 거주 필요)
+    "pesticide", "insecticide", "bug killer", "pest control",
+    "mosquito killer", "roach killer", "rat poison", "insect killer",
+    "pest repell",  # pest repellent / pest repeller
+    # 의약품/건강 (FDA)
+    "supplement", "medication", "pharmaceutical",
+    # 화장품/피부 (FDA)
+    "anti wrinkle", "collagen mask", "face serum",
+    "skincare set", "skin care set",
+    # 의료기기
+    "tens unit", "muscle stimulator", "medical device",
+    "respirator mask",
+    # 무기/위험물
+    "torch lighter", "propane torch", "cigar torch",
+    "welding gun",  # 용접건 (barbecue lighter 류)
+    # SD카드/메모리 (위조품 이슈)
+    "memory card", "micro sd card", "sd card",
+    # 드론 (FAA)
+    "drone", "quadcopter",
+    # 스마트링/웨어러블 (인증)
+    "smart ring health",
+    # 에너지 (FDA)
+    "energy strip", "caffeine strip",
+]
+
+
+def _is_brand_restricted(brand: str) -> bool:
+    """브랜드 등록된 ASIN인지 확인. True면 등록 불가."""
+    return brand.strip().lower() not in _SAFE_BRANDS
+
+
+def _is_category_restricted(title: str) -> bool:
+    """제한 카테고리 상품인지 타이틀 구문으로 확인."""
+    title_lower = title.lower()
+    return any(phrase in title_lower for phrase in _RESTRICTED_CATEGORY_PHRASES)
+
 
 # ── 노이즈 사전 ─────────────────────────────────────
 
@@ -197,19 +241,35 @@ def _search_catalog(keywords: str, page_size: int = 10) -> list[dict]:
 
     items = resp.payload.get("items", [])
     results = []
+    filtered_brand = 0
+    filtered_cat = 0
     for item in items:
         asin = item.get("asin", "")
         summaries = item.get("summaries", [])
         if not summaries:
             continue
         s = summaries[0]
+        brand = s.get("brand", "")
+        title = s.get("itemName", "")
+
+        # v3: 브랜드/카테고리 사전 필터
+        if _is_brand_restricted(brand):
+            filtered_brand += 1
+            continue
+        if _is_category_restricted(title):
+            filtered_cat += 1
+            continue
+
         results.append({
             "asin": asin,
-            "title": s.get("itemName", ""),
-            "brand": s.get("brand", ""),
+            "title": title,
+            "brand": brand,
         })
 
-    logger.info(f"CatalogItems '{keywords[:50]}' → {len(results)}건")
+    logger.info(
+        f"CatalogItems '{keywords[:50]}' → {len(results)}건 "
+        f"(브랜드 제외 {filtered_brand}, 카테고리 제외 {filtered_cat})"
+    )
     return results
 
 
@@ -315,6 +375,11 @@ def search_asin_candidates(product_id: int) -> list[dict]:
         raise ValueError(f"상품 ID {product_id} 없음")
 
     product = dict(row)
+
+    # v3: CJ 상품 자체가 제한 카테고리면 매칭 스킵
+    if _is_category_restricted(product["product_name"]):
+        logger.info(f"상품 {product_id} 제한 카테고리 스킵: {product['product_name'][:50]}")
+        return []
 
     # Amazon 중위가 조회 (search_keyword 또는 category 기반)
     agg_price = _get_agg_price(product.get("search_keyword") or "")

@@ -77,13 +77,19 @@ def build_offer_payload(
     }
 
 
+MIN_MARGIN_MULT = 1.40  # 원가 대비 최소 1.4배 (마진 ~28%)
+
+
 def _get_product_for_offer(product_id: int) -> dict:
-    """offer 등록에 필요한 상품 정보 조회."""
+    """offer 등록에 필요한 상품 정보 조회 + 가격 자동 조정."""
     with get_db() as conn:
         row = conn.execute(
-            """SELECT id, product_name, matched_asin, calculated_price,
-                      source_price, stock_quantity
-               FROM collected_products WHERE id = ?""",
+            """SELECT cp.id, cp.product_name, cp.matched_asin, cp.calculated_price,
+                      cp.source_price, cp.stock_quantity, cp.search_keyword,
+                      asg.price_p75
+               FROM collected_products cp
+               LEFT JOIN amazon_search_agg asg ON cp.search_keyword = asg.keyword
+               WHERE cp.id = ?""",
             (product_id,),
         ).fetchone()
     if not row:
@@ -91,6 +97,22 @@ def _get_product_for_offer(product_id: int) -> dict:
     product = dict(row)
     if not product.get("matched_asin"):
         raise ValueError(f"상품 {product_id}: matched_asin 없음 (먼저 ASIN 매칭 필요)")
+
+    # v3: 가격 자동 조정 — p75 이하로, 최소 마진 보장
+    calc = product["calculated_price"] or 29.99
+    p75 = product.get("price_p75")
+    src = product["source_price"] or 0
+    min_price = src * MIN_MARGIN_MULT
+
+    if p75 and calc > p75:
+        adjusted = round(max(p75, min_price), 2)
+        if adjusted < min_price:
+            raise ValueError(
+                f"상품 {product_id}: 시장가(p75=${p75:.2f}) < 최소마진(${min_price:.2f}), 수익 불가"
+            )
+        logger.info(f"가격 조정: {product_id} ${calc:.2f} → ${adjusted:.2f} (p75=${p75:.2f})")
+        product["calculated_price"] = adjusted
+
     return product
 
 
