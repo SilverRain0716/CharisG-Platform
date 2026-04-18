@@ -80,5 +80,5 @@ def bulk_delete(body: BulkDeleteBody, user: dict = Depends(current_user)):
 
 @router.post("/promote-all")
 def promote_all_route(user: dict = Depends(current_user)):
-    promoted = promote_all()
-    return {"promoted": promoted}
+    result = promote_all()
+    return result

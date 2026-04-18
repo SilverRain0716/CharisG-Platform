@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 
 from backend.purchase.database import get_db
 from backend.purchase.services.image_downloader import download_product_images, fetch_amazon_images
-from backend_shared.ai import translate_text, generate_seo, map_category
+from backend.purchase.services.category_rag import resolve_category
+from backend_shared.ai import translate_text, generate_seo
 
 logger = logging.getLogger(__name__)
 
@@ -281,13 +282,16 @@ def _save_detail_page_pa(product_id: int, html: str, sections_json: str,
         return cur.lastrowid
 
 
-async def process_product(product_id: int, platform: str = "smartstore") -> dict:
-    """단일 상품 AI 처리 파이프라인."""
+async def process_product(product_id: int, platform: str = "smartstore", force: bool = False) -> dict:
+    """단일 상품 AI 처리 파이프라인. force=False이면 이미 처리된 상품은 스킵."""
     with get_db() as conn:
         row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
     if not row:
         raise ValueError(f"product {product_id} 없음")
     row = dict(row)
+
+    if not force and row.get("ai_processed_at"):
+        return {"product_id": product_id, "skipped": True, "reason": "이미 처리됨"}
 
     title_en = row.get("title_en") or ""
     if not title_en:
@@ -316,43 +320,47 @@ async def process_product(product_id: int, platform: str = "smartstore") -> dict
                 )
             logger.info(f"[product {product_id}] 이미지 보충 완료: {len(existing_urls)} → {len(merged)}장")
 
-    img_result = await download_product_images(product_id, images_json)
-
-    # 1. 번역
-    tr_title = await translate_text(title_en, "en", "ko")
-    title_ko = tr_title["translated"]
-
     description_en = row.get("description_en") or ""
-    description_ko = None
-    if description_en:
-        tr_desc = await translate_text(description_en, "en", "ko")
-        description_ko = tr_desc["translated"]
+    existing_cat = row.get("category_path") or ""
 
-    # 2. SEO
-    seo_result = await generate_seo(
+    # 1단계 병렬: 이미지 다운로드 + 제목/설명 번역 동시 (서로 독립)
+    title_task = translate_text(title_en, "en", "ko")
+    desc_task = translate_text(description_en, "en", "ko") if description_en else None
+    img_task = download_product_images(product_id, images_json)
+
+    tasks = [img_task, title_task] + ([desc_task] if desc_task else [])
+    results = await asyncio.gather(*tasks)
+    img_result = results[0]
+    tr_title = results[1]
+    tr_desc = results[2] if desc_task else None
+
+    title_ko = tr_title["translated"]
+    description_ko = tr_desc["translated"] if tr_desc else None
+
+    # 2단계 병렬: SEO + 카테고리 매핑 (둘 다 title_ko 에 의존)
+    seo_task = generate_seo(
         product_name=title_ko,
-        category=row.get("category_path") or "",
+        category=existing_cat,
         market="KR",
         platform=platform,
         description=description_ko or "",
     )
+    cat_task = None if existing_cat.isdigit() else resolve_category(
+        product_name=title_ko,
+        source_hint=existing_cat,
+    )
+    stage2 = [seo_task] + ([cat_task] if cat_task else [])
+    stage2_results = await asyncio.gather(*stage2)
+    seo_result = stage2_results[0]
+    cat_result = stage2_results[1] if cat_task else None
+
     seo_title = seo_result.get("optimized_title") or title_ko
     if len(title_ko) > 100:
         title_ko = seo_title[:100] if len(seo_title) <= 100 else seo_title[:97] + "..."
     seo_tags_list = seo_result.get("tags") or seo_result.get("keywords") or []
     seo_tags = json.dumps(seo_tags_list, ensure_ascii=False) if seo_tags_list else "[]"
 
-    # 3. 카테고리 매핑 (이미 숫자 ID가 설정되어 있으면 스킵)
-    existing_cat = row.get("category_path") or ""
-    if existing_cat.isdigit():
-        mapped_category = existing_cat
-    else:
-        cat_result = await map_category(
-            product_name=title_ko,
-            source_category=existing_cat,
-            target_platform=platform,
-        )
-        mapped_category = cat_result.get("mapped_category") or existing_cat
+    mapped_category = existing_cat if cat_result is None else (cat_result.get("mapped_category") or existing_cat)
 
     # 4. HTML 생성 (PA 전용 템플릿)
     image_urls = img_result.get("local_urls") or []
@@ -384,34 +392,52 @@ async def process_product(product_id: int, platform: str = "smartstore") -> dict
     }
 
 
-async def process_batch(product_ids: list[int], platform: str = "smartstore"):
-    """여러 상품 순차 AI 처리. 건별 결과를 yield하는 async generator (SSE용)."""
+async def process_batch(product_ids: list[int], platform: str = "smartstore", concurrency: int | None = None):
+    """여러 상품을 Semaphore 병렬로 AI 처리. 완료 순서대로 yield (SSE용).
+
+    concurrency: 동시 처리 상품 수. 환경변수 AI_BATCH_CONCURRENCY 기본 8."""
     total = len(product_ids)
+    if concurrency is None:
+        import os
+        concurrency = int(os.environ.get("AI_BATCH_CONCURRENCY", "8"))
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def run_one(pid: int):
+        async with sem:
+            try:
+                result = await process_product(pid, platform)
+                return {"pid": pid, "ok": True, "title_ko": result.get("title_ko", "")}
+            except Exception as e:
+                logger.warning(f"[ai-processor] product {pid} 실패: {e}")
+                return {"pid": pid, "ok": False, "error": str(e)}
+
+    tasks = [asyncio.create_task(run_one(p)) for p in product_ids]
     processed = 0
     errors = 0
+    done = 0
 
-    for i, pid in enumerate(product_ids, 1):
-        try:
-            result = await process_product(pid, platform)
+    for fut in asyncio.as_completed(tasks):
+        res = await fut
+        done += 1
+        if res["ok"]:
             processed += 1
             yield {
-                "current": i,
+                "current": done,
                 "total": total,
-                "pct": round(i / total * 100, 1),
-                "product_id": pid,
-                "title_ko": result.get("title_ko", ""),
+                "pct": round(done / total * 100, 1),
+                "product_id": res["pid"],
+                "title_ko": res["title_ko"],
                 "status": "ok",
             }
-        except Exception as e:
+        else:
             errors += 1
-            logger.warning(f"[ai-processor] product {pid} 실패: {e}")
             yield {
-                "current": i,
+                "current": done,
                 "total": total,
-                "pct": round(i / total * 100, 1),
-                "product_id": pid,
+                "pct": round(done / total * 100, 1),
+                "product_id": res["pid"],
                 "status": "error",
-                "message": str(e),
+                "message": res["error"],
             }
 
     yield {
@@ -457,7 +483,14 @@ def get_running_job() -> dict | None:
 
 
 async def run_batch_background(job_id: str, product_ids: list[int], platform: str = "smartstore"):
-    """백그라운드 asyncio task로 실행. 진행률을 batch_jobs 테이블에 기록."""
+    """백그라운드 asyncio task로 Semaphore 병렬 실행. 진행률을 batch_jobs 에 기록.
+
+    AI_BATCH_CONCURRENCY 환경변수로 동시 처리 상품 수 조절 (기본 8)."""
+    import os
+    concurrency = int(os.environ.get("AI_BATCH_CONCURRENCY", "8"))
+    sem = asyncio.Semaphore(max(1, concurrency))
+    counter_lock = asyncio.Lock()
+
     total = len(product_ids)
     processed = 0
     errors = 0
@@ -468,21 +501,33 @@ async def run_batch_background(job_id: str, product_ids: list[int], platform: st
             (_now_iso(), job_id),
         )
 
-    for i, pid in enumerate(product_ids, 1):
-        try:
-            await process_product(pid, platform)
-            processed += 1
-        except Exception as e:
-            errors += 1
-            logger.warning(f"[batch-job {job_id}] product {pid} 실패: {e}")
+    skipped = 0
 
-        with get_db() as conn:
-            conn.execute(
-                """UPDATE batch_jobs
-                   SET processed=?, errors=?, current_product_id=?
-                   WHERE id=?""",
-                (processed, errors, pid, job_id),
-            )
+    async def run_one(pid: int):
+        nonlocal processed, errors, skipped
+        async with sem:
+            try:
+                result = await process_product(pid, platform)
+                async with counter_lock:
+                    if result.get("skipped"):
+                        skipped += 1
+                    else:
+                        processed += 1
+            except Exception as e:
+                async with counter_lock:
+                    errors += 1
+                logger.warning(f"[batch-job {job_id}] product {pid} 실패: {e}")
+
+            async with counter_lock:
+                with get_db() as conn:
+                    conn.execute(
+                        """UPDATE batch_jobs
+                           SET processed=?, errors=?, current_product_id=?
+                           WHERE id=?""",
+                        (processed + skipped, errors, pid, job_id),
+                    )
+
+    await asyncio.gather(*[run_one(p) for p in product_ids], return_exceptions=False)
 
     with get_db() as conn:
         conn.execute(
@@ -490,6 +535,6 @@ async def run_batch_background(job_id: str, product_ids: list[int], platform: st
                SET status='done', processed=?, errors=?, finished_at=?,
                    current_product_id=NULL
                WHERE id=?""",
-            (processed, errors, _now_iso(), job_id),
+            (processed + skipped, errors, _now_iso(), job_id),
         )
-    logger.info(f"[batch-job {job_id}] 완료 — 성공 {processed}, 실패 {errors}/{total}")
+    logger.info(f"[batch-job {job_id}] 완료 — 신규 {processed}, 스킵 {skipped}, 실패 {errors}/{total}")

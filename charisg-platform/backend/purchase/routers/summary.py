@@ -9,7 +9,8 @@ router = APIRouter(prefix="/api/pa", tags=["pa-summary"])
 @router.get("/summary")
 def pa_summary():
     with get_db() as conn:
-        active = conn.execute("SELECT COUNT(*) c FROM products WHERE status='active'").fetchone()["c"]
+        # TODO: 쿠팡/네이버 판매 상태 동기화(listed→active 자동 승격) 구현 후 status='active'만 카운트로 복원
+        active = conn.execute("SELECT COUNT(*) c FROM products WHERE status IN ('listed','active')").fetchone()["c"]
         pending_orders = conn.execute(
             "SELECT COUNT(*) c FROM orders WHERE current_step NOT IN ('completed')"
         ).fetchone()["c"]

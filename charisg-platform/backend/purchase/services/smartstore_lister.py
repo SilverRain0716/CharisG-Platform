@@ -14,8 +14,33 @@ from backend.purchase.services.naver_commerce_service import register_product, u
 logger = logging.getLogger(__name__)
 
 
+def _sync_product_status(conn, product_id: int):
+    """리스팅 채널 중 하나라도 listed/active이면 products.status를 listed로 승격."""
+    row = conn.execute(
+        """SELECT COUNT(*) c FROM listings_pa
+           WHERE product_id=? AND status IN ('listed','active')""",
+        (product_id,),
+    ).fetchone()
+    if row["c"] > 0:
+        conn.execute(
+            "UPDATE products SET status='listed' WHERE id=? AND status IN ('draft','ready')",
+            (product_id,),
+        )
+
+
+def _upload_one_image_with_retry(local_path: str, retries: int = 3) -> Optional[str]:
+    import time as _time
+    for attempt in range(retries + 1):
+        url = upload_image(local_path)
+        if url:
+            return url
+        if attempt < retries:
+            _time.sleep(2.0 * (attempt + 1))
+    return None
+
+
 def _get_product_images(product_id: int) -> list[str]:
-    """로컬 이미지를 네이버에 업로드 후 네이버 URL 반환."""
+    """로컬 이미지를 순차 업로드 (글로벌 rate limiter가 동시성 제어)."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT local_path FROM image_cache WHERE product_id=? ORDER BY image_idx",
@@ -24,24 +49,19 @@ def _get_product_images(product_id: int) -> list[str]:
     if not rows:
         return []
 
-    import time as _time
-    naver_urls = []
-    for idx, r in enumerate(rows[:10]):
-        local_path = r["local_path"]
-        url = None
-        for attempt in range(3):
-            url = upload_image(local_path)
-            if url:
-                break
-            _time.sleep(2.0)
+    paths = [r["local_path"] for r in rows[:10]]
+    uploaded = [_upload_one_image_with_retry(p) for p in paths]
+
+    if not uploaded[0]:
+        logger.error(f"[smartstore] product {product_id} 대표이미지 업로드 실패")
+        return []
+
+    naver_urls: list[str] = []
+    for idx, url in enumerate(uploaded):
         if url:
             naver_urls.append(url)
         else:
-            if idx == 0:
-                logger.error(f"[smartstore] product {product_id} 대표이미지 업로드 실패")
-                return []
             logger.warning(f"[smartstore] product {product_id} 이미지 {idx} 업로드 실패 (스킵)")
-        _time.sleep(1.0)
     return naver_urls
 
 
@@ -54,6 +74,8 @@ def _validate_payload(name: str, price: int, category: str, detail_html: str) ->
         return False, f"판매가가 최소 금액(1,000원) 미만입니다 ({price}원)"
     if not category:
         return False, "카테고리 ID가 없습니다"
+    if not category.isdigit() or not (6 <= len(category) <= 12):
+        return False, f"카테고리 ID가 숫자 형식이 아닙니다 ({category[:30]})"
     if not detail_html or len(detail_html) < 10:
         return False, "상세페이지 HTML이 없거나 너무 짧습니다"
     return True, ""
@@ -174,6 +196,16 @@ def build_payload(product_id: int) -> Optional[dict]:
 
 
 def list_product(product_id: int) -> dict:
+    with get_db() as conn:
+        existing = conn.execute(
+            """SELECT channel_product_id FROM listings_pa
+               WHERE product_id=? AND channel='smartstore'""",
+            (product_id,),
+        ).fetchone()
+    if existing and existing["channel_product_id"]:
+        return {"ok": False, "skip": True,
+                "error": f"이미 등록됨 (channel_product_id={existing['channel_product_id']})"}
+
     payload = build_payload(product_id)
     if not payload:
         return {"ok": False, "error": f"product {product_id}: 페이로드 생성 실패 (검증 오류 또는 상품 없음)"}
@@ -198,4 +230,5 @@ def list_product(product_id: int) -> dict:
                WHERE product_id=? AND channel='smartstore'""",
             (str(result.get("originProductNo", "")), product_id),
         )
+        _sync_product_status(conn, product_id)
     return {"ok": True, "result": result}

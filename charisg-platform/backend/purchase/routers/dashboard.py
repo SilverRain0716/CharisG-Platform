@@ -20,7 +20,8 @@ def get_dashboard(user: dict = Depends(current_user)):
             "SELECT COUNT(*) c FROM sourcing_candidates WHERE sourcing_status='go'"
         ).fetchone()["c"]
         listed = conn.execute("SELECT COUNT(*) c FROM listings_pa WHERE status='listed'").fetchone()["c"]
-        active = conn.execute("SELECT COUNT(*) c FROM products WHERE status='active'").fetchone()["c"]
+        # TODO: 쿠팡/네이버 판매 상태 동기화(listed→active 자동 승격) 구현 후 status='active'만 카운트로 복원
+        active = conn.execute("SELECT COUNT(*) c FROM products WHERE status IN ('listed','active')").fetchone()["c"]
 
         # 오늘의 할 일
         nogo_pending = conn.execute(

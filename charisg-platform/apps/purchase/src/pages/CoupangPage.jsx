@@ -32,6 +32,7 @@ export default function CoupangPage() {
   });
   const [previewHtml, setPreviewHtml] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(null);
+  const [tab, setTab] = useState('pending');
   const jobIdRef = useRef(null);
 
   useEffect(() => {
@@ -94,7 +95,12 @@ export default function CoupangPage() {
     }
   };
 
-  const pendingCount = (data?.items || []).filter((r) => r.status === 'pending').length;
+  const allItems = data?.items || [];
+  const pendingItems = allItems.filter((r) => r.status === 'pending');
+  const listedItems = allItems.filter((r) => r.status === 'listed' || r.status === 'active');
+  const pendingCount = pendingItems.length;
+  const listedCount = listedItems.length;
+  const visibleItems = tab === 'pending' ? pendingItems : listedItems;
 
   return (
     <div className="space-y-6">
@@ -156,12 +162,38 @@ export default function CoupangPage() {
         </Card>
       )}
 
-      <Card title={`리스팅 (${data?.items?.length || 0})`} padded={false}>
+      <Card padded={false}>
+        <div className="flex border-b border-ink-100 px-4">
+          <button
+            type="button"
+            onClick={() => setTab('pending')}
+            className={`px-4 py-3 text-sm font-medium border-b-2 -mb-px transition ${
+              tab === 'pending'
+                ? 'border-pa-500 text-pa-600'
+                : 'border-transparent text-ink-500 hover:text-ink-700'
+            }`}
+          >
+            업로드 대기 ({pendingCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('listed')}
+            className={`px-4 py-3 text-sm font-medium border-b-2 -mb-px transition ${
+              tab === 'listed'
+                ? 'border-pa-500 text-pa-600'
+                : 'border-transparent text-ink-500 hover:text-ink-700'
+            }`}
+          >
+            업로드 완료 ({listedCount})
+          </button>
+        </div>
         {isLoading ? (
           <div className="p-8 text-center text-sm text-ink-400">로딩 중...</div>
-        ) : !data?.items?.length ? (
+        ) : !visibleItems.length ? (
           <div className="p-8 text-center text-sm text-ink-400">
-            리스팅이 없습니다. 상품 관리에서 "채널 보내기"를 먼저 실행하세요.
+            {tab === 'pending'
+              ? '업로드 대기 중인 리스팅이 없습니다. 상품 관리에서 "채널 보내기"를 먼저 실행하세요.'
+              : '업로드 완료된 리스팅이 없습니다.'}
           </div>
         ) : (
           <DataTable
@@ -174,19 +206,21 @@ export default function CoupangPage() {
                     <Button size="sm" variant="ghost" onClick={() => handlePreview(row.product_id)}>
                       프리뷰
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ds"
-                      disabled={upload.isPending}
-                      onClick={() => upload.mutate(row.product_id)}
-                    >
-                      업로드
-                    </Button>
+                    {tab === 'pending' && (
+                      <Button
+                        size="sm"
+                        variant="ds"
+                        disabled={upload.isPending}
+                        onClick={() => upload.mutate(row.product_id)}
+                      >
+                        업로드
+                      </Button>
+                    )}
                   </div>
                 ),
               },
             ]}
-            rows={data?.items || []}
+            rows={visibleItems}
             rowKey={(r) => r.id}
           />
         )}

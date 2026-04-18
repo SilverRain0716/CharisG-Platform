@@ -35,6 +35,7 @@ export default function App() {
     queryKey: ['hub', 'summary'],
     queryFn: () => apiFetch('/api/hub/summary'),
     enabled: !!user,
+    retry: false,
   });
 
   useEffect(() => {

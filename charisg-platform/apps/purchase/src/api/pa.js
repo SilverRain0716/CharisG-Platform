@@ -40,6 +40,7 @@ export const pa = {
   },
   product:        (id) => apiFetch(`/api/pa/products/${id}`),
   setProductStatus: (id, status) => apiFetch(`/api/pa/products/${id}/status`, { method: 'PATCH', body: { status } }),
+  bulkDeleteProducts: (body) => apiFetch('/api/pa/products/bulk-delete', { method: 'POST', body }),
 
   // Detail page
   generateDetail: (pid) => apiFetch(`/api/pa/detail-page/${pid}/generate`, { method: 'POST' }),
@@ -95,4 +96,13 @@ export const pa = {
   // Product price override
   updateProductPrice: (pid, sale_price_krw) =>
     apiFetch(`/api/pa/products/${pid}/price`, { method: 'PATCH', body: { sale_price_krw } }),
+
+  // SmartStore attributes
+  attrPending:       () => apiFetch('/api/pa/smartstore/attributes/pending'),
+  attrGet:           (pid) => apiFetch(`/api/pa/smartstore/attributes/${pid}`),
+  attrInfer:         (pid) => apiFetch(`/api/pa/smartstore/attributes/${pid}/infer`, { method: 'POST' }),
+  attrSave:          (pid, attributes) => apiFetch(`/api/pa/smartstore/attributes/${pid}`, { method: 'PUT', body: { attributes } }),
+  attrBatchInfer:    (body) => apiFetch('/api/pa/smartstore/attributes/batch-infer', { method: 'POST', body }),
+  attrBatchAll:      () => apiFetch('/api/pa/smartstore/attributes/batch-all', { method: 'POST' }),
+  attrBatchAllStatus: () => apiFetch('/api/pa/smartstore/attributes/batch-all/status'),
 };

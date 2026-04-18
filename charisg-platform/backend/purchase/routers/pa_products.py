@@ -17,22 +17,27 @@ def list_products(
     status: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
+    unchanneled_only: bool = False,
 ):
-    where = ["business_model='purchase'"]
+    """상품 목록. unchanneled_only=True 면 listings_pa 행이 하나도 없는 상품만 (= 아직 채널로 보낸 적 없음)."""
+    where = ["p.business_model='purchase'"]
     params: list = []
     if status:
-        where.append("status=?")
+        where.append("p.status=?")
         params.append(status)
+    if unchanneled_only:
+        where.append("NOT EXISTS (SELECT 1 FROM listings_pa l WHERE l.product_id = p.id)")
+    where_sql = " AND ".join(where)
     with get_db() as conn:
         rows = conn.execute(
-            f"""SELECT id, asin, title_ko, title_en, sale_price_krw, cost_usd, margin_pct,
-                       category_path, status, bsr, ai_processed_at, seo_title, created_at
-                FROM products WHERE {' AND '.join(where)}
-                ORDER BY id DESC LIMIT ? OFFSET ?""",
+            f"""SELECT p.id, p.asin, p.title_ko, p.title_en, p.sale_price_krw, p.cost_usd, p.margin_pct,
+                       p.category_path, p.status, p.bsr, p.ai_processed_at, p.seo_title, p.created_at
+                FROM products p WHERE {where_sql}
+                ORDER BY p.id DESC LIMIT ? OFFSET ?""",
             (*params, limit, offset),
         ).fetchall()
         total = conn.execute(
-            f"SELECT COUNT(*) c FROM products WHERE {' AND '.join(where)}", tuple(params),
+            f"SELECT COUNT(*) c FROM products p WHERE {where_sql}", tuple(params),
         ).fetchone()["c"]
     return {"items": [dict(r) for r in rows], "total": total}
 
@@ -137,3 +142,59 @@ def set_status(pid: int, body: StatusBody, user: dict = Depends(current_user)):
             (body.status, pid),
         )
     return {"ok": True}
+
+
+def _cascade_delete_products(conn, product_ids: list[int]) -> dict:
+    """products + listings_pa + detail_pages + image_cache cascade 삭제.
+    호출자가 connection 관리 (with get_db() as conn).
+    """
+    if not product_ids:
+        return {"products": 0, "listings_pa": 0, "detail_pages": 0, "image_cache": 0}
+    placeholders = ",".join("?" * len(product_ids))
+    counts = {}
+    for table in ("image_cache", "detail_pages", "listings_pa"):
+        cur = conn.execute(
+            f"DELETE FROM {table} WHERE product_id IN ({placeholders})",
+            product_ids,
+        )
+        counts[table] = cur.rowcount
+    cur = conn.execute(
+        f"DELETE FROM products WHERE id IN ({placeholders})",
+        product_ids,
+    )
+    counts["products"] = cur.rowcount
+    return counts
+
+
+class BulkDeleteBody(BaseModel):
+    ids: list[int] | None = None
+    channel: str | None = None
+    status: str | None = None  # e.g. 'excluded'
+
+
+@router.post("/bulk-delete")
+def bulk_delete(body: BulkDeleteBody, user: dict = Depends(current_user)):
+    """상품 일괄 삭제 (cascade). 두 가지 모드:
+    - ids 지정: 정확히 해당 product_id 들 삭제
+    - channel + status 지정: 그 채널/상태의 listings_pa가 가리키는 product 전체 삭제
+    """
+    if body.ids:
+        ids = [int(i) for i in body.ids]
+    elif body.channel and body.status:
+        with get_db() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT product_id FROM listings_pa
+                   WHERE channel=? AND status=?""",
+                (body.channel, body.status),
+            ).fetchall()
+        ids = [r["product_id"] for r in rows]
+    else:
+        raise HTTPException(400, "ids 또는 channel+status 필수")
+
+    if not ids:
+        return {"deleted": {"products": 0}, "ids": []}
+
+    with get_db() as conn:
+        counts = _cascade_delete_products(conn, ids)
+
+    return {"deleted": counts, "ids": ids}

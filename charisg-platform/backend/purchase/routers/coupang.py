@@ -11,6 +11,7 @@ from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
 from backend.purchase.services.image_downloader import mark_images_for_deletion
 from backend.purchase.services.coupang_service import register_product, get_orders
+from backend.purchase.services.smartstore_lister import _sync_product_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pa/coupang", tags=["pa-coupang"])
@@ -56,11 +57,21 @@ def upload(product_id: int, user: dict = Depends(current_user)):
                VALUES (?, 'coupang', ?, 'listed', CURRENT_TIMESTAMP)""",
             (product_id, str(result.get("data", "") if isinstance(result, dict) else "")),
         )
+        _sync_product_status(conn, product_id)
     mark_images_for_deletion(product_id)
     return {"ok": True, "result": result}
 
 
 def _upload_single_coupang(pid: int) -> dict:
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT channel_product_id FROM listings_pa WHERE product_id=? AND channel='coupang'",
+            (pid,),
+        ).fetchone()
+    if existing and existing["channel_product_id"]:
+        return {"ok": False, "skip": True,
+                "error": f"이미 등록됨 (channel_product_id={existing['channel_product_id']})"}
+
     with get_db() as conn:
         p = conn.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
     if not p:
@@ -83,6 +94,7 @@ def _upload_single_coupang(pid: int) -> dict:
                last_synced_at=CURRENT_TIMESTAMP WHERE product_id=? AND channel='coupang'""",
             (str(result.get("data", "") if isinstance(result, dict) else ""), pid),
         )
+        _sync_product_status(conn, pid)
     mark_images_for_deletion(pid)
     return {"ok": True, "result": result}
 
@@ -151,7 +163,7 @@ async def _run_coupang_upload_bg(job_id: str, product_ids: list[int]):
 
     for pid in product_ids:
         try:
-            res = _upload_single_coupang(pid)
+            res = await asyncio.to_thread(_upload_single_coupang, pid)
             if not res.get("ok"):
                 raise ValueError(res.get("error", "업로드 실패"))
             processed += 1

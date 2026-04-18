@@ -57,7 +57,11 @@ const COLS = [
 
 export default function ProductManagementPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['pa', 'products'], queryFn: () => pa.products({ limit: 200 }) });
+  const [showAll, setShowAll] = useState(false);
+  const { data, isLoading } = useQuery({
+    queryKey: ['pa', 'products', showAll ? 'all' : 'unchanneled'],
+    queryFn: () => pa.products({ limit: 200, ...(showAll ? {} : { unchanneled_only: 'true' }) }),
+  });
 
   const [batchProgress, setBatchProgress] = useState(null);
   const [generatingId, setGeneratingId] = useState(null);
@@ -185,9 +189,20 @@ export default function ProductManagementPage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-ink-900">상품 관리</h1>
-          <p className="mt-1 text-sm text-ink-500">상세페이지 → 등록 → 활성 상품 라이프사이클.</p>
+          <p className="mt-1 text-sm text-ink-500">
+            {showAll ? '전체 상품 (채널 발송 완료 포함)' : '채널에 아직 보내지 않은 상품만 표시.'}
+          </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-sm text-ink-600 cursor-pointer select-none pr-2">
+            <input
+              type="checkbox"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.target.checked)}
+              className="rounded"
+            />
+            전체 상품 보기
+          </label>
           {sendableCount > 0 && (
             <Button
               variant="ghost"
@@ -197,15 +212,15 @@ export default function ProductManagementPage() {
               {bulkSending ? '전송 중…' : `전체 채널 보내기 (${sendableCount}건)`}
             </Button>
           )}
-          {totalCount > 0 && (
+          {unprocessedCount > 0 && (
             <Button
               variant="pa"
               disabled={batchProgress?.status === 'running'}
-              onClick={() => startBatchJob({ all_products: true })}
+              onClick={() => startBatchJob({ all_unprocessed: true })}
             >
               {batchProgress?.status === 'running'
                 ? `상세 생성 중… ${batchProgress.pct ?? 0}%`
-                : `전체 상세 생성 (${totalCount}건${unprocessedCount > 0 ? `, 미처리 ${unprocessedCount}` : ''})`}
+                : `미처리 상세 생성 (${unprocessedCount}건)`}
             </Button>
           )}
         </div>

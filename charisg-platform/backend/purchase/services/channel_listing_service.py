@@ -28,7 +28,13 @@ def send_to_channels(product_id: int, channels: list[str] | None = None) -> dict
                     fee_rate, net_margin_krw, category_mapped)
                    VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
                    ON CONFLICT(product_id, channel) DO UPDATE SET
-                    status='pending', sale_krw=excluded.sale_krw,
+                    status=CASE
+                      WHEN listings_pa.channel_product_id IS NOT NULL
+                           AND listings_pa.channel_product_id != ''
+                        THEN listings_pa.status
+                      ELSE 'pending'
+                    END,
+                    sale_krw=excluded.sale_krw,
                     cost_krw_snapshot=excluded.cost_krw_snapshot,
                     fee_rate=excluded.fee_rate, net_margin_krw=excluded.net_margin_krw,
                     category_mapped=excluded.category_mapped,

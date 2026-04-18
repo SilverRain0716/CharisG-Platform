@@ -95,6 +95,11 @@ def _get_running_upload(channel: str) -> dict | None:
 
 
 async def _run_upload_background(job_id: str, product_ids: list[int], channel: str):
+    import os
+    concurrency = int(os.environ.get("SMARTSTORE_UPLOAD_CONCURRENCY", "2"))
+    sem = asyncio.Semaphore(max(1, concurrency))
+    counter_lock = asyncio.Lock()
+
     processed = 0
     errors = 0
     skipped = 0
@@ -105,27 +110,34 @@ async def _run_upload_background(job_id: str, product_ids: list[int], channel: s
             (_now_iso(), job_id),
         )
 
-    for pid in product_ids:
-        try:
-            res = list_product(pid)
-            if res.get("skip"):
-                skipped += 1
-                logger.info(f"[{channel}-upload-all] product {pid} 제외: {res.get('error')}")
-            elif not res.get("ok"):
-                raise ValueError(res.get("error", "업로드 실패"))
-            else:
-                mark_images_for_deletion(pid)
-                processed += 1
-        except Exception as e:
-            errors += 1
-            logger.warning(f"[{channel}-upload-all] product {pid} 실패: {e}")
+    async def run_one(pid: int):
+        nonlocal processed, errors, skipped
+        async with sem:
+            try:
+                res = await asyncio.to_thread(list_product, pid)
+                if res.get("skip"):
+                    async with counter_lock:
+                        skipped += 1
+                    logger.info(f"[{channel}-upload-all] product {pid} 제외: {res.get('error')}")
+                elif not res.get("ok"):
+                    raise ValueError(res.get("error", "업로드 실패"))
+                else:
+                    mark_images_for_deletion(pid)
+                    async with counter_lock:
+                        processed += 1
+            except Exception as e:
+                async with counter_lock:
+                    errors += 1
+                logger.warning(f"[{channel}-upload-all] product {pid} 실패: {e}")
 
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE batch_jobs SET processed=?, errors=?, current_product_id=? WHERE id=?",
-                (processed, errors, pid, job_id),
-            )
-        await asyncio.sleep(0)
+            async with counter_lock:
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE batch_jobs SET processed=?, errors=?, current_product_id=? WHERE id=?",
+                        (processed, errors, pid, job_id),
+                    )
+
+    await asyncio.gather(*[run_one(pid) for pid in product_ids], return_exceptions=False)
 
     with get_db() as conn:
         conn.execute(
