@@ -315,13 +315,15 @@ def collect_full_catalog(
                             (item["pid"],),
                         ).fetchone()
                         if existing:
+                            # listed/active 상품은 status 보호 (Amazon 등록 유지)
                             conn.execute(
                                 """UPDATE collected_products
                                    SET product_name=?, calculated_price=?, source_price=?,
                                        shipping_cost=?, real_margin_pct=?, stock_quantity=?,
                                        weight_g=?, image_count=?, hard_filter_pass=1,
                                        filter_fail_reason=NULL, us_warehouse=1,
-                                       status='collected', category=?, updated_at=CURRENT_TIMESTAMP
+                                       status = CASE WHEN status IN ('listed','active') THEN status ELSE 'collected' END,
+                                       category=?, updated_at=CURRENT_TIMESTAMP
                                    WHERE id=?""",
                                 (item["name"], item["suggest_price"], item["sell_price"],
                                  item["ship_cost"], item["margin_pct"], item["inventory"],
