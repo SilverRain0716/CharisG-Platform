@@ -16,13 +16,27 @@ def list_listings(user: dict = Depends(current_user)):
     with get_db() as conn:
         rows = conn.execute(
             """SELECT l.id, l.product_id, l.asin, l.sku, l.tier, l.status, l.title,
-                      l.last_price, l.listed_at, l.activated_at,
-                      p.product_name, p.image_url, p.real_margin_pct
+                      l.current_price, l.current_stock, l.last_price,
+                      l.listed_at, l.activated_at, l.last_synced_at,
+                      p.product_name, p.image_url, p.real_margin_pct, p.source_price
                FROM listings l
                LEFT JOIN collected_products p ON l.product_id = p.id
                ORDER BY l.id DESC"""
         ).fetchall()
-    return [dict(r) for r in rows]
+        total = len(rows)
+        active = sum(1 for r in rows if r["status"] == "active")
+        paused = sum(1 for r in rows if r["status"] == "paused")
+        listed = sum(1 for r in rows if r["status"] == "listed")
+
+    return {
+        "items": [dict(r) for r in rows],
+        "kpis": {
+            "total": total,
+            "active": active,
+            "paused": paused,
+            "listed": listed,
+        },
+    }
 
 
 class ListingContent(BaseModel):

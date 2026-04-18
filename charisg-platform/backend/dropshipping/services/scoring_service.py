@@ -1,5 +1,19 @@
 """
 scoring_service.py — Phase 0 스코어링 파이프라인 v2
+
+⚠️ 데이터 위험 (2026-04-16):
+  `collected_products.go_decision` 필드는 monolith(control_tower.db)에서 마이그레이션된
+  스테일 데이터이며, 현재 이 서비스는 해당 필드를 READ/WRITE 하지 않는다.
+  monolith의 기존 GO 레코드 중 일부는 Hard Filter(blocked_cat / branded / blocked_keyword)
+  조건을 무시하고 기록된 것이 있어서, 2026-04-16 에 166건을 'BLOCKED' 로 재분류했다.
+
+  원칙:
+    1) go_decision 을 읽는 모든 쿼리는 반드시 `hard_filter_pass=1` 조건과 AND 로 결합해야 한다.
+    2) 이 파이프라인은 go_decision 을 업데이트하지 않으므로, 대시보드의 "GO" 숫자는
+       여전히 monolith 잔재에 의존한다. 향후 `go_decision` 을 현재 파이프라인 결과로
+       재생성하려면 `_save_scores()` 에 WRITE 로직을 추가해야 한다.
+    3) Phase C(SP-API 업로드) 진입 시에는 hard_filter_pass=1 을 반드시 확인하여
+       branded/blocked 상품이 실수로 업로드되지 않게 한다.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 2축 곱셈 모델: Final Score = Demand Score × Margin Score
 

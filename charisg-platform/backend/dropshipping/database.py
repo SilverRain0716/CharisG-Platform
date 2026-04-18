@@ -37,3 +37,14 @@ def init_db() -> None:
     runner = MigrationRunner(str(DB_PATH))
     schema = Path(__file__).resolve().parent / "migrations" / "schema_ds.sql"
     runner.apply(schema, version=1, description="dropshipping initial schema")
+
+    # v2: collected_products에 matched_asin 컬럼 추가 (멱등)
+    import sqlite3
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.execute("ALTER TABLE collected_products ADD COLUMN matched_asin TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # 이미 존재
+    finally:
+        conn.close()

@@ -12,11 +12,14 @@ def ds_summary():
         active = conn.execute(
             "SELECT COUNT(*) c FROM collected_products WHERE status='active'"
         ).fetchone()["c"]
+        # ⚠️ go_decision 은 monolith 마이그레이션 스테일 데이터 가능성 → hard_filter_pass=1 가드 필수
         go = conn.execute(
-            "SELECT COUNT(*) c FROM collected_products WHERE go_decision IN ('GO','GO_ORGANIC')"
+            "SELECT COUNT(*) c FROM collected_products "
+            "WHERE go_decision IN ('GO','GO_ORGANIC') AND hard_filter_pass=1"
         ).fetchone()["c"]
         avg_margin_row = conn.execute(
-            "SELECT AVG(real_margin_pct) m FROM collected_products WHERE go_decision='GO'"
+            "SELECT AVG(real_margin_pct) m FROM collected_products "
+            "WHERE go_decision='GO' AND hard_filter_pass=1"
         ).fetchone()
         avg_margin = avg_margin_row["m"] if avg_margin_row and avg_margin_row["m"] is not None else 0
 

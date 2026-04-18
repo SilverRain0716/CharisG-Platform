@@ -7,23 +7,17 @@ import { apiFetch, useAuth } from '@charisg/auth';
 import PipelineOverview from './pages/PipelineOverview.jsx';
 import ScoringDashboard from './pages/ScoringDashboard.jsx';
 import ProductList from './pages/ProductList.jsx';
-import PriceCompetitiveness from './pages/PriceCompetitiveness.jsx';
-import ListingStatus from './pages/ListingStatus.jsx';
+import MyListings from './pages/MyListings.jsx';
 import AccountHealth from './pages/AccountHealth.jsx';
-import CrawlerManagement from './pages/CrawlerManagement.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
-import Performance from './pages/Performance.jsx';
 
 const NAV = [
-  { id: 'overview',  href: '/',                   label: '대시보드' },
-  { id: 'scoring',   href: '/scoring',            label: '스코어링' },
-  { id: 'products',  href: '/products',           label: '상품 목록' },
-  { id: 'price',     href: '/price',              label: '가격 경쟁력' },
-  { id: 'kanban',    href: '/kanban',             label: '리스팅 칸반' },
-  { id: 'health',    href: '/health',             label: '계정 건강도' },
-  { id: 'crawler',   href: '/crawler',            label: '크롤러' },
-  { id: 'settings',  href: '/settings',           label: '설정' },
-  { id: 'performance', href: '/performance',      label: '매출·성과 (Phase 1+)' },
+  { id: 'overview',  href: '/',          label: '대시보드' },
+  { id: 'scoring',   href: '/scoring',   label: '스코어링' },
+  { id: 'products',  href: '/products',  label: '상품 후보' },
+  { id: 'listings',  href: '/listings',  label: '내 리스팅' },
+  { id: 'health',    href: '/health',    label: '계정 건강도' },
+  { id: 'settings',  href: '/settings',  label: '설정' },
 ];
 
 export default function App() {
@@ -35,6 +29,7 @@ export default function App() {
     queryKey: ['hub', 'summary'],
     queryFn: () => apiFetch('/api/hub/summary'),
     enabled: !!user,
+    retry: false,
   });
 
   useEffect(() => {
@@ -75,12 +70,9 @@ export default function App() {
             <Route path="/" element={<PipelineOverview />} />
             <Route path="/scoring" element={<ScoringDashboard />} />
             <Route path="/products" element={<ProductList />} />
-            <Route path="/price" element={<PriceCompetitiveness />} />
-            <Route path="/kanban" element={<ListingStatus />} />
+            <Route path="/listings" element={<MyListings />} />
             <Route path="/health" element={<AccountHealth />} />
-            <Route path="/crawler" element={<CrawlerManagement />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/performance" element={<Performance />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

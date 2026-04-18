@@ -1,4 +1,12 @@
-"""DS Dashboard — 퍼널 + KPI + 알림 (View 1: Pipeline Overview)."""
+"""DS Dashboard — 퍼널 + KPI + 알림 (View 1: Pipeline Overview).
+
+⚠️ 데이터 위험 주의 (2026-04-16):
+  collected_products.go_decision 필드는 monolith 마이그레이션에서 들어온 값으로,
+  Hard Filter(blocked_cat / branded / blocked_keyword) 위반 상품이 과거에는 GO 로
+  기록돼 있었음. 2026-04-16 에 go_decision='GO' AND hard_filter_pass=0 인 166개를
+  'BLOCKED' 로 재분류함. 신규 마이그레이션으로 다시 오염될 수 있으므로 GO 카운트
+  쿼리는 반드시 hard_filter_pass=1 조건을 함께 걸어야 한다.
+"""
 from fastapi import APIRouter, Depends
 
 from backend.dropshipping.auth import current_user
@@ -20,7 +28,8 @@ def get_dashboard(user: dict = Depends(current_user)):
         ).fetchone()["c"]
 
         go_count = conn.execute(
-            "SELECT COUNT(*) c FROM collected_products WHERE go_decision='GO'"
+            "SELECT COUNT(*) c FROM collected_products "
+            "WHERE go_decision='GO' AND hard_filter_pass=1"
         ).fetchone()["c"]
 
         listed = conn.execute(
@@ -31,9 +40,15 @@ def get_dashboard(user: dict = Depends(current_user)):
             "SELECT COUNT(*) c FROM listings WHERE status='active'"
         ).fetchone()["c"]
 
+        asin_matched = conn.execute(
+            "SELECT COUNT(*) c FROM collected_products "
+            "WHERE hard_filter_pass=1 AND matched_asin IS NOT NULL AND matched_asin != ''"
+        ).fetchone()["c"]
+
         # KPI
         avg_margin = conn.execute(
-            "SELECT AVG(real_margin_pct) m FROM collected_products WHERE go_decision='GO'"
+            "SELECT AVG(real_margin_pct) m FROM collected_products "
+            "WHERE go_decision='GO' AND hard_filter_pass=1"
         ).fetchone()["m"] or 0
 
         # 알림
@@ -48,12 +63,12 @@ def get_dashboard(user: dict = Depends(current_user)):
 
     return {
         "funnel": [
-            {"key": "cj_total",    "label": "CJ 38K",    "count": 38000},
-            {"key": "collected",   "label": "Collected", "count": total_collected},
-            {"key": "filter",      "label": "Filter",    "count": filter_passed},
-            {"key": "go",          "label": "GO",        "count": go_count},
-            {"key": "listed",      "label": "Listed",    "count": listed},
-            {"key": "active",      "label": "Active",    "count": active},
+            {"key": "cj_total",    "label": "CJ 수집",     "count": total_collected},
+            {"key": "filter",      "label": "필터 통과",   "count": filter_passed},
+            {"key": "go",          "label": "GO 판정",     "count": go_count},
+            {"key": "matched",     "label": "ASIN 매칭",   "count": asin_matched},
+            {"key": "listed",      "label": "Amazon 등록", "count": listed},
+            {"key": "active",      "label": "활성",        "count": active},
         ],
         "kpis": {
             "go_count": go_count,

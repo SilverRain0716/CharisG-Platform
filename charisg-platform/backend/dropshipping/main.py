@@ -1,7 +1,7 @@
 """
 DS API entrypoint — port 8001.
 
-라우터 13개 + dropshipping.db.
+라우터 14개 + dropshipping.db.
 """
 import logging
 import os
@@ -19,6 +19,7 @@ from backend.dropshipping.routers import (
     summary, dashboard, scoring, cj, gap, trends,
     ds_products, ds_listings, crawler, fees,
     ds_monitor, ds_settings, detail_page, process, category,
+    ds_asin_pipeline,
 )
 from backend_shared.context import register_db_factory
 
@@ -50,7 +51,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 13 routers
+# 14 routers
 app.include_router(summary.router)
 app.include_router(dashboard.router)
 app.include_router(scoring.router)
@@ -66,6 +67,7 @@ app.include_router(ds_settings.router)
 app.include_router(detail_page.router)
 app.include_router(process.router)
 app.include_router(category.router)
+app.include_router(ds_asin_pipeline.router)
 
 
 @app.get("/api/ds/health")

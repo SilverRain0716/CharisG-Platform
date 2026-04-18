@@ -228,6 +228,28 @@ CREATE INDEX IF NOT EXISTS idx_sales_listing   ON sales(listing_id);
 CREATE INDEX IF NOT EXISTS idx_sales_purchased ON sales(purchased_at);
 
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-- 7) asin_match_candidates — ASIN 매칭 후보 (검색 결과 + 점수)
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CREATE TABLE IF NOT EXISTS asin_match_candidates (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id      INTEGER NOT NULL,
+    asin            TEXT NOT NULL,
+    amazon_title    TEXT,
+    amazon_brand    TEXT,
+    amazon_price    REAL,
+    title_sim       REAL,
+    price_compat    REAL,
+    match_score     REAL,
+    match_verdict   TEXT,       -- strong|moderate|weak|reject
+    selected        BOOLEAN DEFAULT 0,
+    searched_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(product_id, asin)
+);
+
+CREATE INDEX IF NOT EXISTS idx_amc_product ON asin_match_candidates(product_id);
+CREATE INDEX IF NOT EXISTS idx_amc_verdict ON asin_match_candidates(match_verdict);
+
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- 번역 캐시 (backend_shared.ai 가 사용)
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CREATE TABLE IF NOT EXISTS translation_cache (

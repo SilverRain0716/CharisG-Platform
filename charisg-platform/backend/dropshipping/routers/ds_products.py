@@ -41,7 +41,8 @@ def list_products(
                        source_price, calculated_price, real_margin_pct, adjusted_margin_pct,
                        demand_score, demand_grade, gap_score,
                        margin_score, margin_grade, matrix_group, sort_score,
-                       go_decision, status, tier, image_url, url, search_keyword
+                       go_decision, status, tier, image_url, url, search_keyword,
+                       matched_asin
                 FROM collected_products
                 WHERE {" AND ".join(where)}
                 ORDER BY {sort} {direction}
