@@ -1,12 +1,13 @@
 import React from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, StatusBadge } from '@charisg/ui';
-import { ds } from '../api/ds.js';
+import { useMarket } from '../App.jsx';
 
 export default function SettingsPage() {
+  const { market, ds } = useMarket();
   const qc = useQueryClient();
-  const filters = useQuery({ queryKey: ['ds', 'filters'], queryFn: ds.filters });
-  const brands = useQuery({ queryKey: ['ds', 'brands'], queryFn: ds.brands });
+  const filters = useQuery({ queryKey: ['ds', 'filters', market], queryFn: ds.filters });
+  const brands = useQuery({ queryKey: ['ds', 'brands', market], queryFn: ds.brands });
   const crawler = useQuery({ queryKey: ['ds', 'crawler'], queryFn: ds.crawlerStatus });
 
   const runCrawler = useMutation({

@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/ds/products", tags=["ds-products"])
 @router.get("")
 def list_products(
     user: dict = Depends(current_user),
+    market: str = "US",
     status: Optional[str] = None,
     matrix: Optional[str] = None,
     go: Optional[str] = None,
@@ -58,7 +59,7 @@ def list_products(
 
 
 @router.get("/kanban")
-def kanban_data(user: dict = Depends(current_user)):
+def kanban_data(market: str = "US", user: dict = Depends(current_user)):
     """4열 칸반: candidate / listed / active / paused."""
     cols = {"candidate": [], "listed": [], "active": [], "paused": []}
     with get_db() as conn:
@@ -76,7 +77,7 @@ def kanban_data(user: dict = Depends(current_user)):
 
 
 @router.get("/{product_id}")
-def get_product(product_id: int, user: dict = Depends(current_user)):
+def get_product(product_id: int, market: str = "US", user: dict = Depends(current_user)):
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM collected_products WHERE id=?", (product_id,)
@@ -84,9 +85,10 @@ def get_product(product_id: int, user: dict = Depends(current_user)):
         if not row:
             raise HTTPException(404, "상품 없음")
         listing = conn.execute(
-            "SELECT * FROM listings WHERE product_id=? ORDER BY id DESC LIMIT 1", (product_id,)
+            "SELECT * FROM listings WHERE product_id=? AND marketplace=? ORDER BY id DESC LIMIT 1",
+            (product_id, market),
         ).fetchone()
-    return {"product": dict(row), "listing": dict(listing) if listing else None}
+    return {"product": dict(row), "listing": dict(listing) if listing else None, "market": market}
 
 
 class StatusUpdate(BaseModel):

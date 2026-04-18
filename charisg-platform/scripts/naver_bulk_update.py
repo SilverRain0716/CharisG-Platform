@@ -16,6 +16,20 @@ import time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+# .env 로드
+from pathlib import Path
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    with open(_env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                v = v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                    v = v[1:-1]
+                os.environ.setdefault(k.strip(), v)
+
 # ── 경로 설정
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "packages", "backend-shared"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

@@ -1,11 +1,12 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, KPICard, FunnelChart, AlertFeed } from '@charisg/ui';
-import { ds } from '../api/ds.js';
+import { useMarket } from '../App.jsx';
 
 export default function PipelineOverview() {
-  const { data, isLoading } = useQuery({ queryKey: ['ds', 'dashboard'], queryFn: ds.dashboard });
-  const { data: asin } = useQuery({ queryKey: ['ds', 'asin-summary'], queryFn: ds.asinSummary });
+  const { market, ds } = useMarket();
+  const { data, isLoading } = useQuery({ queryKey: ['ds', 'dashboard', market], queryFn: ds.dashboard });
+  const { data: asin } = useQuery({ queryKey: ['ds', 'asin-summary', market], queryFn: ds.asinSummary });
 
   const kpis = data?.kpis || {};
   const a = asin || {};
@@ -14,7 +15,7 @@ export default function PipelineOverview() {
     <div className="space-y-6">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight text-ink-900">대시보드</h1>
-        <p className="mt-1 text-sm text-ink-500">Charis G Amazon US FBM 드랍쉬핑 파이프라인.</p>
+        <p className="mt-1 text-sm text-ink-500">Amazon {market} FBM 드랍쉬핑 파이프라인.</p>
       </header>
 
       {isLoading && <div className="text-sm text-ink-400">로딩 중...</div>}

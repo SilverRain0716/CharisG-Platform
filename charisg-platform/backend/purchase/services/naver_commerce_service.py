@@ -32,17 +32,12 @@ _TOKEN_LOCK = threading.Lock()
 _TOKEN_CACHE: dict = {"access_token": None, "expires_at": 0.0}
 _TOKEN_SAFETY_MARGIN_SEC = 120
 
-# ── 글로벌 Rate Limiter (적응형) ─────────────────────────────
-# 네이버 API 동시 요청수 제한 (이미지 업로드 + 상품 등록 합산)
-_API_CONCURRENCY = int(os.environ.get("NAVER_API_CONCURRENCY", "2"))
-_API_SEM = threading.Semaphore(_API_CONCURRENCY)
-_REQUEST_INTERVAL_SEC = float(os.environ.get("NAVER_REQUEST_INTERVAL", "0.65"))
-_LAST_REQUEST_LOCK = threading.Lock()
+# ── 글로벌 Rate Limiter (네이버 공식 2/s, 직렬 큐) ────────────
+# 네이버 커머스 API 공식 제한: 초당 2회 (내스토어 앱 기준)
+# 모든 API 호출을 단일 Lock으로 직렬화하여 0.55초 간격(≈1.8/s) 보장
+_GATE_LOCK = threading.Lock()
 _LAST_REQUEST_TIME = 0.0
-# 적응형: 429 발생 시 간격을 자동으로 늘리고, 안정되면 원래로 복귀
-_ADAPTIVE_INTERVAL = _REQUEST_INTERVAL_SEC
-_ADAPTIVE_LOCK = threading.Lock()
-_CONSECUTIVE_OK = 0  # 연속 성공 횟수
+_MIN_INTERVAL = 0.55  # 초당 ~1.8회 (2/s 미만으로 안전 마진)
 
 # ── 재시도 정책 ────────────────────────────────────────────────
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
@@ -50,56 +45,33 @@ _MAX_RETRIES = 6
 _BASE_BACKOFF_SEC = 2.0
 
 
-def _on_429():
-    """429 발생 시 요청 간격을 자동으로 늘림."""
-    global _ADAPTIVE_INTERVAL, _CONSECUTIVE_OK
-    with _ADAPTIVE_LOCK:
-        _ADAPTIVE_INTERVAL = min(_ADAPTIVE_INTERVAL + 0.15, 1.0)
-        _CONSECUTIVE_OK = 0
-        logger.info(f"[adaptive-throttle] 429 감지 → 간격 {_ADAPTIVE_INTERVAL:.2f}s")
-
-
-def _on_success():
-    """성공 시 연속 50회 이상이면 간격을 서서히 줄임."""
-    global _ADAPTIVE_INTERVAL, _CONSECUTIVE_OK
-    with _ADAPTIVE_LOCK:
-        _CONSECUTIVE_OK += 1
-        if _CONSECUTIVE_OK >= 50 and _ADAPTIVE_INTERVAL > _REQUEST_INTERVAL_SEC:
-            _ADAPTIVE_INTERVAL = max(_ADAPTIVE_INTERVAL - 0.05, _REQUEST_INTERVAL_SEC)
-            _CONSECUTIVE_OK = 0
-            logger.info(f"[adaptive-throttle] 안정 → 간격 {_ADAPTIVE_INTERVAL:.2f}s")
-
-
-def _throttle():
-    """최소 요청 간격 보장 (적응형)."""
+def _gate():
+    """모든 네이버 API 호출 전 반드시 통과. 최소 간격 보장 (직렬)."""
     global _LAST_REQUEST_TIME
-    with _LAST_REQUEST_LOCK:
+    with _GATE_LOCK:
         now = time.time()
         elapsed = now - _LAST_REQUEST_TIME
-        if elapsed < _ADAPTIVE_INTERVAL:
-            time.sleep(_ADAPTIVE_INTERVAL - elapsed)
+        if elapsed < _MIN_INTERVAL:
+            time.sleep(_MIN_INTERVAL - elapsed)
         _LAST_REQUEST_TIME = time.time()
 
 
 def _request_with_retry(method: str, url: str, **kwargs) -> Optional[requests.Response]:
-    """429/5xx 시 지수 백오프 재시도. 글로벌 세마포어 + 쓰로틀링 적용."""
+    """429/5xx 시 지수 백오프 재시도. 글로벌 직렬 gate로 2/s 이내 보장."""
     for attempt in range(_MAX_RETRIES + 1):
-        with _API_SEM:
-            _throttle()
-            try:
-                r = _SESSION.request(method, url, **kwargs)
-            except requests.exceptions.RequestException as e:
-                if attempt >= _MAX_RETRIES:
-                    logger.warning(f"네이버 네트워크 예외 (끝까지): {e}")
-                    return None
-                wait = _BASE_BACKOFF_SEC * (2 ** attempt)
-                logger.warning(f"네이버 네트워크 예외 → {wait:.1f}s 대기 후 재시도 ({attempt + 1}/{_MAX_RETRIES}): {e}")
-                time.sleep(wait)
-                continue
+        _gate()
+        try:
+            r = _SESSION.request(method, url, **kwargs)
+        except requests.exceptions.RequestException as e:
+            if attempt >= _MAX_RETRIES:
+                logger.warning(f"네이버 네트워크 예외 (끝까지): {e}")
+                return None
+            wait = _BASE_BACKOFF_SEC * (2 ** attempt)
+            logger.warning(f"네이버 네트워크 예외 → {wait:.1f}s 대기 후 재시도 ({attempt + 1}/{_MAX_RETRIES}): {e}")
+            time.sleep(wait)
+            continue
 
         if r.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
-            if r.status_code == 429:
-                _on_429()
             retry_after = r.headers.get("Retry-After")
             try:
                 wait = float(retry_after) if retry_after else _BASE_BACKOFF_SEC * (2 ** attempt)
@@ -111,7 +83,6 @@ def _request_with_retry(method: str, url: str, **kwargs) -> Optional[requests.Re
             )
             time.sleep(wait)
             continue
-        _on_success()
         return r
     return None
 
@@ -170,6 +141,60 @@ def _get_token() -> Optional[str]:
         _TOKEN_CACHE["access_token"] = tok
         _TOKEN_CACHE["expires_at"] = exp
         return tok
+
+
+def upload_images_batch(file_paths: list[str]) -> list[Optional[str]]:
+    """여러 이미지를 한 번의 API 호출로 업로드 (최대 10개). 호출 1회로 10장 처리."""
+    token = _get_token()
+    if not token:
+        return [None] * len(file_paths)
+
+    import mimetypes
+    files_data = []
+    valid_indices: list[int] = []
+
+    for i, path in enumerate(file_paths):
+        mime = mimetypes.guess_type(path)[0] or "image/jpeg"
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            if not data:
+                logger.warning(f"빈 이미지 파일: {path}")
+                continue
+            files_data.append(("imageFiles", (path.split("/")[-1], data, mime)))
+            valid_indices.append(i)
+        except Exception as e:
+            logger.warning(f"이미지 읽기 실패 {path}: {e}")
+
+    if not files_data:
+        return [None] * len(file_paths)
+
+    r = _request_with_retry(
+        "POST",
+        BASE + "/v1/product-images/upload",
+        files=files_data,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=60,
+    )
+    if r is None or r.status_code >= 400:
+        logger.error(
+            f"네이버 이미지 배치 업로드 실패: "
+            f"{r.status_code if r else 'no-response'} "
+            f"{r.text[:200] if r else ''}"
+        )
+        return [None] * len(file_paths)
+
+    resp = r.json()
+    images = resp.get("images") or []
+
+    results: list[Optional[str]] = [None] * len(file_paths)
+    for idx, img in zip(valid_indices, images):
+        url = img.get("url")
+        if url:
+            results[idx] = url
+
+    logger.info(f"네이버 이미지 배치 업로드 완료: {sum(1 for u in results if u)}/{len(file_paths)}장")
+    return results
 
 
 def upload_image(file_path: str) -> Optional[str]:

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, DataTable, StatusBadge, KPICard } from '@charisg/ui';
-import { ds } from '../api/ds.js';
+import { useMarket } from '../App.jsx';
 
 const COLS = [
   { key: 'asin', label: 'ASIN', width: '130px',
@@ -25,8 +25,9 @@ const COLS = [
 ];
 
 export default function MyListings() {
+  const { market, ds } = useMarket();
   const { data, isLoading } = useQuery({
-    queryKey: ['ds', 'listings'],
+    queryKey: ['ds', 'listings', market],
     queryFn: ds.listings,
   });
 

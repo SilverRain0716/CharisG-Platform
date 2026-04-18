@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, DataTable, StatusBadge, Button, KPICard } from '@charisg/ui';
-import { ds } from '../api/ds.js';
+import { useMarket } from '../App.jsx';
 
 /* ── Tab: 전체 후보 ─────────────────────────────── */
 
@@ -24,9 +24,10 @@ const ALL_COLS = [
 ];
 
 function TabAll() {
+  const { market, ds } = useMarket();
   const [filterGo, setFilterGo] = useState('');
   const { data, isLoading } = useQuery({
-    queryKey: ['ds', 'products', filterGo],
+    queryKey: ['ds', 'products', filterGo, market],
     queryFn: () => ds.products(filterGo ? { go: filterGo } : {}),
   });
 
@@ -75,35 +76,36 @@ const MATCH_COLS = [
 ];
 
 function TabMatch() {
+  const { market, ds } = useMarket();
   const qc = useQueryClient();
   const [expandedId, setExpandedId] = useState(null);
 
-  const summary = useQuery({ queryKey: ['ds', 'asin-summary'], queryFn: ds.asinSummary });
+  const summary = useQuery({ queryKey: ['ds', 'asin-summary', market], queryFn: ds.asinSummary });
   const products = useQuery({
-    queryKey: ['ds', 'products', 'all'],
+    queryKey: ['ds', 'products', 'all', market],
     queryFn: () => ds.products({ limit: 500 }),
   });
   const progress = useQuery({
-    queryKey: ['ds', 'match-progress'],
+    queryKey: ['ds', 'match-progress', market],
     queryFn: ds.matchProgress,
     refetchInterval: (q) => q.state.data?.running ? 1500 : false,
   });
   const candidates = useQuery({
-    queryKey: ['ds', 'candidates', expandedId],
+    queryKey: ['ds', 'candidates', expandedId, market],
     queryFn: () => ds.matchCandidates(expandedId),
     enabled: !!expandedId,
   });
 
   const runBatch = useMutation({
     mutationFn: () => ds.matchBatch({ limit: 50 }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ds', 'match-progress'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ds', 'match-progress', market] }),
   });
   const selectAsin = useMutation({
     mutationFn: ({ id, asin }) => ds.matchSelect(id, asin),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ds', 'products'] });
-      qc.invalidateQueries({ queryKey: ['ds', 'asin-summary'] });
-      qc.invalidateQueries({ queryKey: ['ds', 'candidates', expandedId] });
+      qc.invalidateQueries({ queryKey: ['ds', 'asin-summary', market] });
+      qc.invalidateQueries({ queryKey: ['ds', 'candidates', expandedId, market] });
     },
   });
 
@@ -241,22 +243,23 @@ function TabMatch() {
 /* ── Tab: 업로드 대기 ───────────────────────────── */
 
 function TabUpload() {
+  const { market, ds } = useMarket();
   const qc = useQueryClient();
 
-  const summary = useQuery({ queryKey: ['ds', 'asin-summary'], queryFn: ds.asinSummary });
+  const summary = useQuery({ queryKey: ['ds', 'asin-summary', market], queryFn: ds.asinSummary });
   const products = useQuery({
-    queryKey: ['ds', 'products', 'matched'],
+    queryKey: ['ds', 'products', 'matched', market],
     queryFn: () => ds.products({ limit: 500 }),
   });
   const progress = useQuery({
-    queryKey: ['ds', 'offer-progress'],
+    queryKey: ['ds', 'offer-progress', market],
     queryFn: ds.offerProgress,
     refetchInterval: (q) => q.state.data?.running ? 1500 : false,
   });
 
   const runBatch = useMutation({
     mutationFn: (dryRun) => ds.offerBatch({ limit: 20, dry_run: dryRun }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ds', 'offer-progress'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ds', 'offer-progress', market] }),
   });
 
   const s = summary.data || {};

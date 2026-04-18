@@ -548,7 +548,15 @@ async def batch_all(user: dict = Depends(current_user)):
             try:
                 attrs_with_values = _get_attrs_with_values(cat_id)
                 if not attrs_with_values:
+                    # 속성 0개 카테고리 → "해당없음"으로 마킹
+                    with get_db() as conn:
+                        for p in group:
+                            conn.execute(
+                                "UPDATE products SET attributes_updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                                (p["id"],),
+                            )
                     _BATCH_ALL_STATUS["processed"] += len(group)
+                    logger.info(f"[batch-all] cat={cat_id} 속성 없음 → {len(group)}건 마킹")
                     continue
 
                 # Gemini 1회로 그룹 전체 추론
@@ -566,6 +574,12 @@ async def batch_all(user: dict = Depends(current_user)):
                             logger.warning(f"[batch-all] product {pid} 네이버 저장 실패: {e}")
                             _BATCH_ALL_STATUS["errors"] += 1
                     else:
+                        # AI 매칭 실패 → 마킹해서 재처리 방지
+                        with get_db() as conn:
+                            conn.execute(
+                                "UPDATE products SET attributes_updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                                (pid,),
+                            )
                         _BATCH_ALL_STATUS["processed"] += 1
 
             except Exception as e:

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, KPICard, Button, Input, StatusBadge } from '@charisg/ui';
-import { ds } from '../api/ds.js';
+import { useMarket } from '../App.jsx';
 
 const TARGETS = {
   odr: { max: 1.0, target: 0.5, label: 'ODR' },
@@ -24,8 +24,9 @@ function gauge(metric, value) {
 }
 
 export default function AccountHealth() {
+  const { market, ds } = useMarket();
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['ds', 'health'], queryFn: ds.health });
+  const { data, isLoading } = useQuery({ queryKey: ['ds', 'health', market], queryFn: ds.health });
 
   const [form, setForm] = useState({ odr: '', late_shipment_rate: '', cancel_rate: '', valid_tracking_rate: '', note: '' });
 

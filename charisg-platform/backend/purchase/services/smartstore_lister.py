@@ -9,7 +9,7 @@ import logging
 from typing import Optional
 
 from backend.purchase.database import get_db
-from backend.purchase.services.naver_commerce_service import register_product, upload_image
+from backend.purchase.services.naver_commerce_service import register_product, upload_image, upload_images_batch
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def _upload_one_image_with_retry(local_path: str, retries: int = 3) -> Optional[
 
 
 def _get_product_images(product_id: int) -> list[str]:
-    """로컬 이미지를 순차 업로드 (글로벌 rate limiter가 동시성 제어)."""
+    """로컬 이미지를 배치 업로드 (1회 API 호출로 최대 10장). 실패 시 개별 폴백."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT local_path FROM image_cache WHERE product_id=? ORDER BY image_idx",
@@ -50,19 +50,27 @@ def _get_product_images(product_id: int) -> list[str]:
         return []
 
     paths = [r["local_path"] for r in rows[:10]]
-    uploaded = [_upload_one_image_with_retry(p) for p in paths]
 
-    if not uploaded[0]:
-        logger.error(f"[smartstore] product {product_id} 대표이미지 업로드 실패")
-        return []
+    # 배치 업로드 시도 (1회 API 호출)
+    results = upload_images_batch(paths)
+    naver_urls = [url for url in results if url]
 
-    naver_urls: list[str] = []
-    for idx, url in enumerate(uploaded):
-        if url:
-            naver_urls.append(url)
-        else:
-            logger.warning(f"[smartstore] product {product_id} 이미지 {idx} 업로드 실패 (스킵)")
-    return naver_urls
+    if naver_urls:
+        return naver_urls
+
+    # 배치 실패 시 대표이미지만 개별 재시도
+    url = _upload_one_image_with_retry(paths[0])
+    if url:
+        logger.warning(f"[smartstore] product {product_id} 배치 실패 → 대표이미지 개별 업로드 성공")
+        return [url]
+
+    logger.error(f"[smartstore] product {product_id} 대표이미지 업로드 실패")
+    return []
+
+
+def preupload_images(product_id: int) -> list[str]:
+    """이미지 사전 업로드 (파이프라인 Phase 1용). URL 목록 반환."""
+    return _get_product_images(product_id)
 
 
 def _validate_payload(name: str, price: int, category: str, detail_html: str) -> tuple[bool, str]:
@@ -81,7 +89,7 @@ def _validate_payload(name: str, price: int, category: str, detail_html: str) ->
     return True, ""
 
 
-def build_payload(product_id: int) -> Optional[dict]:
+def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optional[dict]:
     with get_db() as conn:
         p = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
         if not p:
@@ -105,7 +113,8 @@ def build_payload(product_id: int) -> Optional[dict]:
         logger.warning(f"[smartstore] product {product_id} 검증 실패: {err}")
         return None
 
-    image_urls = _get_product_images(product_id)
+    if image_urls is None:
+        image_urls = _get_product_images(product_id)
 
     if desc_html:
         import re
@@ -195,7 +204,7 @@ def build_payload(product_id: int) -> Optional[dict]:
     return payload
 
 
-def list_product(product_id: int) -> dict:
+def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
     with get_db() as conn:
         existing = conn.execute(
             """SELECT channel_product_id FROM listings_pa
@@ -206,7 +215,7 @@ def list_product(product_id: int) -> dict:
         return {"ok": False, "skip": True,
                 "error": f"이미 등록됨 (channel_product_id={existing['channel_product_id']})"}
 
-    payload = build_payload(product_id)
+    payload = build_payload(product_id, image_urls=image_urls)
     if not payload:
         return {"ok": False, "error": f"product {product_id}: 페이로드 생성 실패 (검증 오류 또는 상품 없음)"}
     result = register_product(payload)

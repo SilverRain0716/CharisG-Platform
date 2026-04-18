@@ -1,8 +1,8 @@
-"""DS Listings — 리스팅 콘텐츠 편집 (Tier1 / Tier2)."""
+"""DS Listings — 마켓별 리스팅 목록 + 콘텐츠 편집."""
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.dropshipping.auth import current_user
@@ -12,16 +12,18 @@ router = APIRouter(prefix="/api/ds/listings", tags=["ds-listings"])
 
 
 @router.get("")
-def list_listings(user: dict = Depends(current_user)):
+def list_listings(market: str = Query(default="US"), user: dict = Depends(current_user)):
     with get_db() as conn:
         rows = conn.execute(
             """SELECT l.id, l.product_id, l.asin, l.sku, l.tier, l.status, l.title,
                       l.current_price, l.current_stock, l.last_price,
-                      l.listed_at, l.activated_at, l.last_synced_at,
+                      l.listed_at, l.activated_at, l.last_synced_at, l.marketplace,
                       p.product_name, p.image_url, p.real_margin_pct, p.source_price
                FROM listings l
                LEFT JOIN collected_products p ON l.product_id = p.id
-               ORDER BY l.id DESC"""
+               WHERE l.marketplace = ?
+               ORDER BY l.id DESC""",
+            (market,),
         ).fetchall()
         total = len(rows)
         active = sum(1 for r in rows if r["status"] == "active")
@@ -29,6 +31,7 @@ def list_listings(user: dict = Depends(current_user)):
         listed = sum(1 for r in rows if r["status"] == "listed")
 
     return {
+        "market": market,
         "items": [dict(r) for r in rows],
         "kpis": {
             "total": total,
@@ -44,15 +47,16 @@ class ListingContent(BaseModel):
     bullets: list[str] = []
     description: str = ""
     keywords: list[str] = []
-    tier: Optional[str] = None  # tier1|tier2
+    tier: Optional[str] = None
 
 
 @router.put("/{product_id}/content")
-def update_content(product_id: int, body: ListingContent, user: dict = Depends(current_user)):
+def update_content(product_id: int, body: ListingContent, market: str = Query(default="US"),
+                   user: dict = Depends(current_user)):
     with get_db() as conn:
         existing = conn.execute(
-            "SELECT id FROM listings WHERE product_id=? ORDER BY id DESC LIMIT 1",
-            (product_id,),
+            "SELECT id FROM listings WHERE product_id=? AND marketplace=? ORDER BY id DESC LIMIT 1",
+            (product_id, market),
         ).fetchone()
         if existing:
             conn.execute(
@@ -66,9 +70,9 @@ def update_content(product_id: int, body: ListingContent, user: dict = Depends(c
             return {"ok": True, "id": existing["id"]}
         else:
             cur = conn.execute(
-                """INSERT INTO listings (product_id, business_model, tier, status, title, bullets, description, keywords)
-                   VALUES (?, 'dropship', ?, 'candidate', ?, ?, ?, ?)""",
-                (product_id, body.tier or "tier2", body.title,
+                """INSERT INTO listings (product_id, business_model, marketplace, tier, status, title, bullets, description, keywords)
+                   VALUES (?, 'dropship', ?, ?, 'candidate', ?, ?, ?, ?)""",
+                (product_id, market, body.tier or "tier2", body.title,
                  json.dumps(body.bullets, ensure_ascii=False), body.description,
                  json.dumps(body.keywords, ensure_ascii=False)),
             )

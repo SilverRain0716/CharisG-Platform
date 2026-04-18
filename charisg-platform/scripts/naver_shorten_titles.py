@@ -32,7 +32,11 @@ if _env_path.exists():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
+                v = v.strip()
+                # 따옴표 제거 ('...' 또는 "...")
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                    v = v[1:-1]
+                os.environ.setdefault(k.strip(), v)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "packages", "backend-shared"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

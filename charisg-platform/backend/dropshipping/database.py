@@ -47,6 +47,7 @@ def init_db() -> None:
         _add_column(conn, "collected_products", "cn_shipping_cost", "REAL")
         _add_column(conn, "listings", "marketplace", "TEXT NOT NULL DEFAULT 'US'")
         _add_column(conn, "asin_match_candidates", "marketplace", "TEXT NOT NULL DEFAULT 'US'")
+        _add_column(conn, "account_health", "marketplace", "TEXT NOT NULL DEFAULT 'US'")
         # 환율 테이블
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS exchange_rates (

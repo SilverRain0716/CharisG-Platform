@@ -1,7 +1,7 @@
-"""DS Monitor — 계정 건강도 + CJ 재고 + Amazon 가격 변동."""
+"""DS Monitor — 마켓별 계정 건강도 + CJ 재고 + Amazon 가격 변동."""
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from backend.dropshipping.auth import current_user
@@ -11,16 +11,23 @@ router = APIRouter(prefix="/api/ds/monitor", tags=["ds-monitor"])
 
 
 @router.get("/health")
-def get_health(user: dict = Depends(current_user)):
+def get_health(market: str = Query(default="US"), user: dict = Depends(current_user)):
     with get_db() as conn:
         rows = conn.execute(
             """SELECT odr, late_shipment_rate, cancel_rate, valid_tracking_rate,
-                      input_type, note, updated_at
-               FROM account_health ORDER BY id DESC LIMIT 30"""
+                      input_type, note, marketplace, updated_at
+               FROM account_health WHERE marketplace=? ORDER BY id DESC LIMIT 30""",
+            (market,),
         ).fetchall()
+        if not rows:
+            rows = conn.execute(
+                """SELECT odr, late_shipment_rate, cancel_rate, valid_tracking_rate,
+                          input_type, note, updated_at
+                   FROM account_health ORDER BY id DESC LIMIT 30"""
+            ).fetchall()
     if not rows:
-        return {"current": None, "history": []}
-    return {"current": dict(rows[0]), "history": [dict(r) for r in rows]}
+        return {"market": market, "current": None, "history": []}
+    return {"market": market, "current": dict(rows[0]), "history": [dict(r) for r in rows]}
 
 
 class HealthInput(BaseModel):
@@ -32,20 +39,21 @@ class HealthInput(BaseModel):
 
 
 @router.post("/health")
-def post_health(body: HealthInput, user: dict = Depends(current_user)):
+def post_health(body: HealthInput, market: str = Query(default="US"),
+                user: dict = Depends(current_user)):
     with get_db() as conn:
         cur = conn.execute(
             """INSERT INTO account_health
-               (odr, late_shipment_rate, cancel_rate, valid_tracking_rate, input_type, note)
-               VALUES (?, ?, ?, ?, 'manual', ?)""",
-            (body.odr, body.late_shipment_rate, body.cancel_rate, body.valid_tracking_rate, body.note),
+               (odr, late_shipment_rate, cancel_rate, valid_tracking_rate, input_type, note, marketplace)
+               VALUES (?, ?, ?, ?, 'manual', ?, ?)""",
+            (body.odr, body.late_shipment_rate, body.cancel_rate,
+             body.valid_tracking_rate, body.note, market),
         )
-    return {"ok": True, "id": cur.lastrowid}
+    return {"ok": True, "id": cur.lastrowid, "market": market}
 
 
 @router.get("/stock")
-def stock_alerts(user: dict = Depends(current_user)):
-    """재고 < 10 GO/Listed/Active 상품."""
+def stock_alerts(market: str = Query(default="US"), user: dict = Depends(current_user)):
     with get_db() as conn:
         rows = conn.execute(
             """SELECT id, product_name, stock_quantity, status
@@ -57,8 +65,7 @@ def stock_alerts(user: dict = Depends(current_user)):
 
 
 @router.get("/price-changes")
-def price_changes(user: dict = Depends(current_user)):
-    """Listed/Active 상품의 Amazon p75 변동 추적 — 임계치 초과 시 재가격 제안."""
+def price_changes(market: str = Query(default="US"), user: dict = Depends(current_user)):
     with get_db() as conn:
         rows = conn.execute(
             """SELECT cp.id, cp.product_name, cp.calculated_price, cp.amazon_price_p75,

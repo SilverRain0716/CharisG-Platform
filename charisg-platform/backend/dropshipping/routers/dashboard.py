@@ -3,11 +3,9 @@
 ⚠️ 데이터 위험 주의 (2026-04-16):
   collected_products.go_decision 필드는 monolith 마이그레이션에서 들어온 값으로,
   Hard Filter(blocked_cat / branded / blocked_keyword) 위반 상품이 과거에는 GO 로
-  기록돼 있었음. 2026-04-16 에 go_decision='GO' AND hard_filter_pass=0 인 166개를
-  'BLOCKED' 로 재분류함. 신규 마이그레이션으로 다시 오염될 수 있으므로 GO 카운트
-  쿼리는 반드시 hard_filter_pass=1 조건을 함께 걸어야 한다.
+  기록돼 있었음. GO 카운트 쿼리는 반드시 hard_filter_pass=1 조건을 함께 걸어야 한다.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from backend.dropshipping.auth import current_user
 from backend.dropshipping.database import get_db
@@ -16,9 +14,8 @@ router = APIRouter(prefix="/api/ds", tags=["ds-dashboard"])
 
 
 @router.get("/dashboard")
-def get_dashboard(user: dict = Depends(current_user)):
+def get_dashboard(market: str = Query(default="US"), user: dict = Depends(current_user)):
     with get_db() as conn:
-        # 파이프라인 단계별 카운트
         total_collected = conn.execute(
             "SELECT COUNT(*) c FROM collected_products"
         ).fetchone()["c"]
@@ -33,11 +30,13 @@ def get_dashboard(user: dict = Depends(current_user)):
         ).fetchone()["c"]
 
         listed = conn.execute(
-            "SELECT COUNT(*) c FROM listings WHERE status IN ('listed','active')"
+            "SELECT COUNT(*) c FROM listings WHERE status IN ('listed','active') AND marketplace=?",
+            (market,),
         ).fetchone()["c"]
 
         active = conn.execute(
-            "SELECT COUNT(*) c FROM listings WHERE status='active'"
+            "SELECT COUNT(*) c FROM listings WHERE status='active' AND marketplace=?",
+            (market,),
         ).fetchone()["c"]
 
         asin_matched = conn.execute(
@@ -45,13 +44,11 @@ def get_dashboard(user: dict = Depends(current_user)):
             "WHERE hard_filter_pass=1 AND matched_asin IS NOT NULL AND matched_asin != ''"
         ).fetchone()["c"]
 
-        # KPI
         avg_margin = conn.execute(
             "SELECT AVG(real_margin_pct) m FROM collected_products "
             "WHERE go_decision='GO' AND hard_filter_pass=1"
         ).fetchone()["m"] or 0
 
-        # 알림
         alerts_raw = []
         low_stock = conn.execute(
             "SELECT product_name FROM collected_products "
@@ -62,6 +59,7 @@ def get_dashboard(user: dict = Depends(current_user)):
             alerts_raw.append({"type": "warn", "title": "재고 부족", "message": r["product_name"]})
 
     return {
+        "market": market,
         "funnel": [
             {"key": "cj_total",    "label": "CJ 수집",     "count": total_collected},
             {"key": "filter",      "label": "필터 통과",   "count": filter_passed},

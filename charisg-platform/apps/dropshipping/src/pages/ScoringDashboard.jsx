@@ -2,7 +2,7 @@ import React from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { Card, Button } from '@charisg/ui';
-import { ds } from '../api/ds.js';
+import { useMarket } from '../App.jsx';
 
 const PHASE_LABEL = {
   idle: '대기',
@@ -20,19 +20,20 @@ const CELL_COLOR = {
 };
 
 export default function ScoringDashboard() {
+  const { market, ds } = useMarket();
   const qc = useQueryClient();
-  const matrix = useQuery({ queryKey: ['ds', 'matrix'], queryFn: ds.scoringMatrix });
-  const dist = useQuery({ queryKey: ['ds', 'dist'], queryFn: ds.scoringDist });
-  const fails = useQuery({ queryKey: ['ds', 'fails'], queryFn: ds.filterFails });
+  const matrix = useQuery({ queryKey: ['ds', 'matrix', market], queryFn: ds.scoringMatrix });
+  const dist = useQuery({ queryKey: ['ds', 'dist', market], queryFn: ds.scoringDist });
+  const fails = useQuery({ queryKey: ['ds', 'fails', market], queryFn: ds.filterFails });
   const progress = useQuery({
-    queryKey: ['ds', 'progress'],
+    queryKey: ['ds', 'progress', market],
     queryFn: ds.scoringProgress,
     refetchInterval: (q) => (q.state.data?.running ? 1500 : false),
   });
   const run = useMutation({
     mutationFn: () => ds.runScoring({ collect_cj: 'true', use_trends: 'true' }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['ds', 'progress'] });
+      qc.invalidateQueries({ queryKey: ['ds', 'progress', market] });
     },
   });
 
