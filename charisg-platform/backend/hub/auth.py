@@ -88,15 +88,27 @@ def revoke_session(token: str) -> None:
         conn.execute("UPDATE sessions SET revoked=1 WHERE token_hash=?", (token_hash,))
 
 
-def current_user(charisg_session: Optional[str] = Cookie(default=None)) -> dict:
+def current_user(request: Request, charisg_session: Optional[str] = Cookie(default=None)) -> dict:
     """FastAPI Depends() 용. 쿠키에서 토큰을 읽어 사용자를 반환."""
     if AUTH_BYPASS:
         return _BYPASS_USER
 
+    logger.warning(
+        "AUTH_DEBUG path=%s cookie_header=%r charisg_session=%r",
+        request.url.path,
+        request.headers.get("cookie"),
+        (charisg_session[:20] + "...") if charisg_session else None,
+    )
+
     if not charisg_session:
         raise HTTPException(status_code=401, detail="not authenticated")
 
-    payload = decode_token(charisg_session)
+    try:
+        payload = decode_token(charisg_session)
+    except HTTPException as e:
+        logger.warning("AUTH_DEBUG decode_token 실패: %s", e.detail)
+        raise
+
     return {
         "id": payload.get("uid"),
         "username": payload.get("sub"),

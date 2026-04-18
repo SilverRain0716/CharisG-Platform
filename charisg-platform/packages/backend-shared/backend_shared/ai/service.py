@@ -29,9 +29,16 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════
 
 class GeminiRateLimiter:
-    """Gemini API 무료 티어 한도 보호 — RPM 15, RPD 1,500"""
+    """Gemini API 호출 한도 보호 — 기본값은 유료 Tier 1 (RPM 1000, RPD 10000).
 
-    def __init__(self, rpm: int = 14, rpd: int = 1400):
+    GEMINI_RPM, GEMINI_RPD 환경변수로 오버라이드 가능.
+    무료 티어라면 환경변수에서 RPM 14, RPD 1400 으로 낮출 것."""
+
+    def __init__(self, rpm: int | None = None, rpd: int | None = None):
+        if rpm is None:
+            rpm = int(os.environ.get("GEMINI_RPM", "800"))
+        if rpd is None:
+            rpd = int(os.environ.get("GEMINI_RPD", "9000"))
         self._rpm = rpm
         self._rpd = rpd
         self._lock = threading.Lock()
@@ -90,6 +97,12 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # Gemini 모델 설정
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+
+# Gemini 임베딩 모델 (768차원 축소 사용)
+GEMINI_EMBED_MODEL = "gemini-embedding-001"
+GEMINI_EMBED_DIM = 768
+GEMINI_EMBED_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBED_MODEL}:embedContent"
+GEMINI_EMBED_BATCH_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBED_MODEL}:batchEmbedContents"
 
 
 # ═══════════════════════════════════════
@@ -162,25 +175,34 @@ async def map_category(
     source_category: str = "",
     target_platform: str = "smartstore",
 ) -> dict:
-    """
-    카테고리 자동 매핑
+    """네이버 스마트스토어 leafCategoryId (숫자 8~10자리) 매핑.
 
-    Returns: {"mapped_category": "매핑된 카테고리", "confidence": 0.8}
+    Returns: {"mapped_category": "50000313", "confidence": 0.0~1.0}
+    - 숫자 ID만 반환. 한글 경로/슬래시 포함 시 무효 처리.
     """
-    prompt = f"""다음 상품의 카테고리를 {target_platform} 마켓에 맞게 매핑해주세요.
+    prompt = f"""당신은 네이버 스마트스토어 카테고리 매핑 전문가입니다.
+다음 상품에 맞는 네이버 스마트스토어 leafCategoryId (숫자 8~10자리 코드)를 찾아주세요.
 
 상품명: {product_name}
-원본 카테고리: {source_category}
-대상 플랫폼: {target_platform}
+원본 카테고리 힌트: {source_category}
 
-JSON으로만 답변하세요 (다른 텍스트 없이):
-{{"mapped_category": "카테고리 경로", "confidence": 0.0~1.0}}"""
+중요 규칙:
+1. mapped_category 는 반드시 **숫자만** 포함 (예: "50000313"). 한글/슬래시/공백 금지.
+2. 네이버에 실제로 존재하는 leaf(말단) 카테고리 ID만 반환.
+3. 확실하지 않으면 confidence 를 0.3 이하로 낮추고, 가장 근접한 상위 카테고리 ID 사용.
+
+JSON으로만 답변 (다른 텍스트 없이):
+{{"mapped_category": "50000313", "confidence": 0.0~1.0}}"""
 
     result = await _call_ai_async(prompt)
     try:
-        return json.loads(result)
+        parsed = json.loads(result)
+        mc = str(parsed.get("mapped_category", "")).strip()
+        if not mc.isdigit() or not (6 <= len(mc) <= 12):
+            return {"mapped_category": "", "confidence": 0.0, "raw": mc}
+        return parsed
     except (json.JSONDecodeError, TypeError):
-        return {"mapped_category": source_category, "confidence": 0.0}
+        return {"mapped_category": "", "confidence": 0.0}
 
 
 async def generate_cs_draft(
@@ -240,6 +262,76 @@ async def _call_ai_async(prompt: str, max_tokens: int = 2000) -> Optional[str]:
     return await asyncio.to_thread(_call_ai_sync, prompt, max_tokens)
 
 
+def embed_text(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[list[float]]:
+    """Gemini 임베딩 (단건). 768-dim float list 반환."""
+    if not GEMINI_API_KEY or not text:
+        return None
+    for attempt in range(3):
+        if not gemini_limiter.wait():
+            return None
+        try:
+            r = requests.post(
+                f"{GEMINI_EMBED_URL}?key={GEMINI_API_KEY}",
+                json={
+                    "model": f"models/{GEMINI_EMBED_MODEL}",
+                    "content": {"parts": [{"text": text[:8000]}]},
+                    "taskType": task_type,
+                    "outputDimensionality": GEMINI_EMBED_DIM,
+                },
+                timeout=15,
+            )
+            if r.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            r.raise_for_status()
+            return r.json().get("embedding", {}).get("values")
+        except Exception as e:
+            logger.warning(f"embed_text 실패 attempt={attempt}: {e}")
+            time.sleep(1)
+    return None
+
+
+def embed_batch(texts: list[str], task_type: str = "SEMANTIC_SIMILARITY", batch_size: int = 100) -> list[Optional[list[float]]]:
+    """Gemini 임베딩 (배치). batchEmbedContents API 사용."""
+    if not GEMINI_API_KEY or not texts:
+        return []
+    results: list[Optional[list[float]]] = []
+    for start in range(0, len(texts), batch_size):
+        chunk = texts[start:start + batch_size]
+        for attempt in range(3):
+            if not gemini_limiter.wait():
+                results.extend([None] * len(chunk))
+                break
+            try:
+                r = requests.post(
+                    f"{GEMINI_EMBED_BATCH_URL}?key={GEMINI_API_KEY}",
+                    json={
+                        "requests": [
+                            {
+                                "model": f"models/{GEMINI_EMBED_MODEL}",
+                                "content": {"parts": [{"text": t[:8000]}]},
+                                "taskType": task_type,
+                                "outputDimensionality": GEMINI_EMBED_DIM,
+                            } for t in chunk
+                        ]
+                    },
+                    timeout=60,
+                )
+                if r.status_code == 429:
+                    time.sleep(2 ** attempt)
+                    continue
+                r.raise_for_status()
+                embeddings = r.json().get("embeddings", [])
+                results.extend([e.get("values") for e in embeddings])
+                break
+            except Exception as e:
+                logger.warning(f"embed_batch 실패 (start={start}, attempt={attempt}): {e}")
+                time.sleep(1)
+        else:
+            results.extend([None] * len(chunk))
+    return results
+
+
 def _call_ai_sync(prompt: str, max_tokens: int = 2000) -> Optional[str]:
     """AI API 호출 (provider 분기, 동기)"""
     if AI_PROVIDER == "claude":
@@ -280,8 +372,8 @@ def _call_gemini(prompt: str, max_tokens: int = 2000, max_retries: int = 3) -> O
                 continue
 
             if resp.status_code == 503:
-                wait = 10 * (attempt + 1)
-                logger.warning(f"⏳ Gemini 503 서버 과부하 → {wait}초 대기")
+                wait = 3 * (2 ** attempt)  # 3s, 6s, 12s
+                logger.warning(f"⏳ Gemini 503 서버 과부하 → {wait}초 대기 ({attempt + 1}/{max_retries})")
                 time.sleep(wait)
                 continue
 
@@ -369,6 +461,13 @@ def _build_translate_prompt(text: str, source_lang: str, target_lang: str, conte
 
     prompt = f"""{src}를 {tgt}로 번역해주세요. 상품명/설명 번역이므로 자연스러운 상업적 표현을 사용하세요.
 
+규칙:
+- 상품명은 반드시 90~95자 이내로 작성하세요 (네이버 스마트스토어 100자 제한).
+- 브랜드명은 영문 그대로 유지하세요.
+- 인증 배지 설명(OEKO-TEX, Climate Pledge 등)은 제외하세요.
+- 특수문자 (" * ? < > \\)는 사용하지 마세요. 인치는 "인치"로, 곱하기는 "x"로 표기하세요.
+- 핵심 스펙(사이즈, 수량, 색상)을 포함하되 불필요한 수식어는 생략하세요.
+
 원문: {text}"""
 
     if context:
@@ -383,7 +482,7 @@ def _build_seo_prompt(
     platform: str, description: str,
 ) -> str:
     market_rules = {
-        "smartstore": "스마트스토어 규정: 상품명 100자 이내, 특수문자 제한, 핵심 키워드 앞배치",
+        "smartstore": "스마트스토어 규정: 상품명 90~95자 이내 (100자 제한), 특수문자(\"*?<>\\) 금지, 인치는 '인치'로 표기, 핵심 키워드 앞배치",
         "coupang": "쿠팡 규정: 상품명 100자 이내, 브랜드명 필수, 주요 스펙 포함",
         "amazon": "Amazon 규정: Title 200자 이내, bullet points 5개, backend keywords",
         "ebay": "eBay 규정: Title 80자 이내, item specifics 활용",

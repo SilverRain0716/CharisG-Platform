@@ -23,8 +23,7 @@ export function AuthProvider({ children }) {
         return;
       }
       try {
-        // silent401: 비로그인 상태에서는 자동 리다이렉트하지 않고 user=null 처리만
-        const me = await apiFetch('/api/hub/auth/me', { silent401: true });
+        const me = await apiFetch('/api/hub/auth/me');
         if (!cancelled) setUser(me);
       } catch {
         if (!cancelled) setUser(null);

@@ -9,6 +9,8 @@ export default function HubDashboard() {
   const { data: summary, isLoading } = useQuery({
     queryKey: ['hub', 'summary'],
     queryFn: () => apiFetch('/api/hub/summary'),
+    enabled: !!user,
+    retry: false,
   });
 
   const ds = summary?.ds || {};

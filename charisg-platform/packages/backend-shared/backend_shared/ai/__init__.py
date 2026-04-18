@@ -8,6 +8,8 @@ from .service import (
     generate_amazon_urls,
     generate_sourcing_keywords,
     gemini_limiter,
+    embed_text,
+    embed_batch,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "generate_amazon_urls",
     "generate_sourcing_keywords",
     "gemini_limiter",
+    "embed_text",
+    "embed_batch",
 ]

@@ -7,6 +7,7 @@ export function getShellOrigin() {
 }
 
 export function redirectToLogin() {
+  if (window.location.pathname === '/login') return;
   const next = window.location.pathname + window.location.search;
   const url = `${getShellOrigin()}/login?next=${encodeURIComponent(next)}`;
   window.location.href = url;
