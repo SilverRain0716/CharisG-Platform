@@ -102,7 +102,7 @@ export default function App() {
               </div>
             }
           />
-          <main className="flex-1 px-6 py-8">
+          <main className="flex-1 min-w-0 px-6 py-8">
             <div className="mb-4 flex items-center gap-2">
               <span className="text-lg">{marketInfo.flag}</span>
               <span className="text-sm font-medium text-ink-500">
