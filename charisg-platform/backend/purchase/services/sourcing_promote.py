@@ -53,68 +53,78 @@ def promote_all() -> dict:
     SP-API로 각 ASIN의 정확한 상품정보(title, description, brand, images)를 수집하여
     시트 데이터를 보강/대체한다.
 
+    2단계 처리로 DB 락 최소화:
+      1단계: DB에서 후보 읽기 → 커넥션 닫기 → SP-API 보강 (네트워크, 락 없음)
+      2단계: 짧은 트랜잭션으로 INSERT + DELETE (락 ~0.1초)
+
     Returns:
         {promoted: int, enriched: int, total: int}
     """
-    conn = sqlite3.connect(str(DB_PATH))
+    # ── 1단계: 후보 읽기 (짧은 읽기 커넥션) ──
+    conn_read = sqlite3.connect(str(DB_PATH))
+    conn_read.row_factory = sqlite3.Row
+    try:
+        rows = conn_read.execute(
+            "SELECT id, asin, title, price_usd, image_url FROM sourcing_candidates"
+        ).fetchall()
+    finally:
+        conn_read.close()
+
+    if not rows:
+        return {"promoted": 0, "enriched": 0, "total": 0}
+
+    # ── SP-API 보강 (DB 커넥션 없이 메모리에서 처리) ──
+    prepared = []
+    enriched = 0
+
+    for r in rows:
+        asin = r["asin"]
+        sheet_title = r["title"]
+        sheet_image = r["image_url"]
+        cost_usd = r["price_usd"]
+
+        sp = _enrich_from_sp_api(asin) if asin else {}
+
+        title_en = sp.get("title") or sheet_title
+
+        description_en = sp.get("description") or ""
+        bullet_points = sp.get("bullet_points")
+        if not description_en and bullet_points:
+            description_en = "\n".join(f"• {bp}" for bp in bullet_points)
+
+        brand = sp.get("brand") or ""
+
+        sp_images = sp.get("images", [])
+        if sp_images:
+            images_json = json.dumps(sp_images, ensure_ascii=False)
+        elif sheet_image:
+            images_json = json.dumps([sheet_image], ensure_ascii=False)
+        else:
+            images_json = None
+
+        prepared.append((
+            r["id"], asin, title_en, description_en, brand,
+            cost_usd, images_json,
+        ))
+        if sp:
+            enriched += 1
+
+    # ── 2단계: 짧은 트랜잭션으로 일괄 INSERT + DELETE ──
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA foreign_keys=OFF")
-        rows = conn.execute(
-            "SELECT id, asin, title, price_usd, image_url FROM sourcing_candidates"
-        ).fetchall()
-
-        if not rows:
-            return {"promoted": 0, "enriched": 0, "total": 0}
-
-        promoted = 0
-        enriched = 0
-
-        for r in rows:
-            asin = r["asin"]
-            sheet_title = r["title"]
-            sheet_image = r["image_url"]
-            cost_usd = r["price_usd"]
-
-            # SP-API 보강
-            sp = _enrich_from_sp_api(asin) if asin else {}
-
-            # title: SP-API 우선 (시트 데이터가 인증 배지로 오염될 수 있음)
-            title_en = sp.get("title") or sheet_title
-
-            # description: SP-API에서만 가져올 수 있음
-            description_en = sp.get("description") or ""
-            bullet_points = sp.get("bullet_points")
-            if not description_en and bullet_points:
-                description_en = "\n".join(f"• {bp}" for bp in bullet_points)
-
-            # brand: SP-API에서만
-            brand = sp.get("brand") or ""
-
-            # images: SP-API 이미지 (최대 15장) > 시트 이미지 (1장)
-            sp_images = sp.get("images", [])
-            if sp_images:
-                images_json = json.dumps(sp_images, ensure_ascii=False)
-            elif sheet_image:
-                images_json = json.dumps([sheet_image], ensure_ascii=False)
-            else:
-                images_json = None
-
-            conn.execute(
-                """INSERT INTO products
-                   (sourcing_id, business_model, asin, title_en, description_en,
-                    brand, cost_usd, images_json, status)
-                   VALUES (?, 'purchase', ?, ?, ?, ?, ?, ?, 'draft')""",
-                (r["id"], asin, title_en, description_en, brand,
-                 cost_usd, images_json),
-            )
-            promoted += 1
-            if sp:
-                enriched += 1
-
+        conn.executemany(
+            """INSERT INTO products
+               (sourcing_id, business_model, asin, title_en, description_en,
+                brand, cost_usd, images_json, status)
+               VALUES (?, 'purchase', ?, ?, ?, ?, ?, ?, 'draft')""",
+            prepared,
+        )
         conn.execute("DELETE FROM sourcing_candidates")
         conn.commit()
 
+        promoted = len(prepared)
         logger.info(f"[promote] {promoted}건 이관, {enriched}건 SP-API 보강")
         return {"promoted": promoted, "enriched": enriched, "total": len(rows)}
 

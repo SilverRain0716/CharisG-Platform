@@ -355,8 +355,8 @@ async def process_product(product_id: int, platform: str = "smartstore", force: 
     cat_result = stage2_results[1] if cat_task else None
 
     seo_title = seo_result.get("optimized_title") or title_ko
-    if len(title_ko) > 100:
-        title_ko = seo_title[:100] if len(seo_title) <= 100 else seo_title[:97] + "..."
+    if len(title_ko) > 50:
+        title_ko = seo_title[:50] if len(seo_title) <= 50 else seo_title[:47] + "..."
     seo_tags_list = seo_result.get("tags") or seo_result.get("keywords") or []
     seo_tags = json.dumps(seo_tags_list, ensure_ascii=False) if seo_tags_list else "[]"
 
