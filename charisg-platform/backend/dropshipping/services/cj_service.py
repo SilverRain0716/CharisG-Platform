@@ -25,8 +25,8 @@ CJ_API_KEY = os.environ.get("CJ_API_KEY", "")
 CJ_API_BASE = "https://developers.cjdropshipping.com/api2.0/v1"
 
 # 필터 기본값
-DEFAULT_PRICE_MIN = 5.0
-DEFAULT_PRICE_MAX = 40.0
+DEFAULT_PRICE_MIN = 0.0    # 소싱가 하한 제거 (판매가 $15+ 하드필터가 대체)
+DEFAULT_PRICE_MAX = 9999.0  # 소싱가 상한 제거
 DEFAULT_MARGIN_MIN = 25.0  # Amazon Referral Fee 반영 후 실질 마진 기준
 
 from backend.dropshipping.database import get_db
@@ -508,9 +508,9 @@ def _parse_product(
             _log_filter_fail(pid, product_name, keyword, sell_price, suggest_price, f"low_stock:{inventory}")
             return None
 
-        # [4] 판매가 $15~$70
-        if not (15 <= suggest_price <= 70):
-            _log_filter_fail(pid, product_name, keyword, sell_price, suggest_price, f"price_range:${suggest_price:.0f}")
+        # [4] 판매가 $15+ (하한만 — 수수료/배송비 감안 최소 수익선)
+        if suggest_price < 15:
+            _log_filter_fail(pid, product_name, keyword, sell_price, suggest_price, f"price_too_low:${suggest_price:.0f}")
             return None
 
         # [5] 무게 ≤ 907g (2lbs)
