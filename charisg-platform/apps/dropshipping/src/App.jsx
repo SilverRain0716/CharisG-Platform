@@ -78,44 +78,31 @@ export default function App() {
           onLogoClick={() => (window.location.href = '/')}
         />
         <div className="mx-auto flex max-w-[1600px]">
-          <aside className="sticky top-14 h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r border-ink-200 bg-white">
-            {/* 마켓 선택기 */}
-            <div className="px-3 py-3 border-b border-ink-200">
-              <label className="block text-xs font-medium text-ink-500 mb-1">마켓플레이스</label>
-              <select
-                value={market}
-                onChange={(e) => setMarket(e.target.value)}
-                className="w-full rounded-md border border-ink-300 bg-white px-2 py-1.5 text-sm font-semibold text-ink-900 focus:border-ds-500 focus:ring-1 focus:ring-ds-500"
-              >
-                {MARKETS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.flag} {m.label} ({m.id})
-                  </option>
-                ))}
-              </select>
-            </div>
-            {/* 네비게이션 */}
-            <nav className="flex-1 overflow-y-auto p-3">
-              <ul className="space-y-1">
-                {items.map((it) => (
-                  <li key={it.id}>
-                    <a
-                      href={it.href}
-                      onClick={(e) => { e.preventDefault(); navigate(it.href); }}
-                      className={`group flex items-center gap-3 rounded-md border-l-2 px-3 py-2 text-sm font-medium ${
-                        it.active
-                          ? 'border-brand-ds-500 bg-brand-ds-50 text-brand-ds-700'
-                          : 'border-transparent text-ink-600 hover:bg-ink-100 hover:text-ink-900'
-                      }`}
-                    >
-                      <span className="flex-1">{it.label}</span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </nav>
-          </aside>
-          <main className="min-w-0 flex-1 px-6 py-8">
+          <Sidebar
+            theme="ds"
+            items={items}
+            onSelect={(id) => {
+              const item = items.find((i) => i.id === id);
+              if (item) navigate(item.href);
+            }}
+            header={
+              <div className="px-3 py-3">
+                <label className="block text-xs font-medium text-ink-500 mb-1">마켓플레이스</label>
+                <select
+                  value={market}
+                  onChange={(e) => setMarket(e.target.value)}
+                  className="w-full rounded-md border border-ink-300 bg-white px-2 py-1.5 text-sm font-semibold text-ink-900 focus:border-ds-500 focus:ring-1 focus:ring-ds-500"
+                >
+                  {MARKETS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.flag} {m.label} ({m.id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            }
+          />
+          <main className="flex-1 px-6 py-8">
             <div className="mb-4 flex items-center gap-2">
               <span className="text-lg">{marketInfo.flag}</span>
               <span className="text-sm font-medium text-ink-500">

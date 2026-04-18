@@ -9,7 +9,7 @@ import { cx } from '../utils/cx.js';
  *   theme:    'ds' | 'pa' | 'shell'  (활성 강조 색)
  *   onSelect: (id) => void
  */
-export function Sidebar({ items = [], theme = 'shell', onSelect }) {
+export function Sidebar({ items = [], theme = 'shell', onSelect, header }) {
   const accent = {
     ds:    'border-brand-ds-500 bg-brand-ds-50 text-brand-ds-700',
     pa:    'border-brand-pa-500 bg-brand-pa-50 text-brand-pa-700',
@@ -18,6 +18,7 @@ export function Sidebar({ items = [], theme = 'shell', onSelect }) {
 
   return (
     <aside className="sticky top-14 flex h-[calc(100vh-3.5rem)] w-60 shrink-0 flex-col border-r border-ink-200 bg-white">
+      {header && <div className="border-b border-ink-200">{header}</div>}
       <nav className="flex-1 overflow-y-auto p-3">
         <ul className="space-y-1">
           {items.map((it) => (
