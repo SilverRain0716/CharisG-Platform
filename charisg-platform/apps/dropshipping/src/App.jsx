@@ -86,7 +86,7 @@ export default function App() {
               if (item) navigate(item.href);
             }}
             header={
-              <div className="px-3 py-3">
+              <div>
                 <label className="block text-xs font-medium text-ink-500 mb-1">마켓플레이스</label>
                 <select
                   value={market}

@@ -8,6 +8,7 @@ import { cx } from '../utils/cx.js';
  *   items:    [{ id, label, icon, href, badge?, active? }]
  *   theme:    'ds' | 'pa' | 'shell'  (활성 강조 색)
  *   onSelect: (id) => void
+ *   header:   ReactNode (네비게이션 위에 렌더링)
  */
 export function Sidebar({ items = [], theme = 'shell', onSelect, header }) {
   const accent = {
@@ -18,8 +19,8 @@ export function Sidebar({ items = [], theme = 'shell', onSelect, header }) {
 
   return (
     <aside className="sticky top-14 flex h-[calc(100vh-3.5rem)] w-60 shrink-0 flex-col border-r border-ink-200 bg-white">
-      {header && <div className="border-b border-ink-200">{header}</div>}
       <nav className="flex-1 overflow-y-auto p-3">
+        {header && <div className="mb-3 pb-3 border-b border-ink-200">{header}</div>}
         <ul className="space-y-1">
           {items.map((it) => (
             <li key={it.id}>
