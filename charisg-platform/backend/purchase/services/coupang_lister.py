@@ -54,6 +54,16 @@ def _extract_brand(name: str) -> str:
     return "해외 브랜드"
 
 
+# ── 상세페이지 정적 배너 (Charis G 브랜드/배송/반품 안내) ──
+# scripts/render_coupang_banners.py 로 한 번 렌더한 정적 JPG를 전 상품 공통 첨부.
+# 내용 수정이 필요하면 templates/coupang_banners_src/*.html 수정 → 스크립트 재실행.
+STATIC_BANNER_PATHS = (
+    "/api/pa/images/banners/banner_1_brand.jpg",
+    "/api/pa/images/banners/banner_2_shipping.jpg",
+    "/api/pa/images/banners/banner_3_policy.jpg",
+)
+
+
 # ── 금지 카테고리 (해외구매대행 등록 불가) ──────────────────
 # Phase 0-4 검색 결과 기반. 코드 상수로 시작 → 추후 DB 테이블 검토.
 PROHIBITED_CATEGORY_KEYWORDS = (
@@ -76,7 +86,7 @@ def _is_prohibited_category(category_name: str) -> tuple[bool, str]:
     return False, ""
 
 
-def _validate_payload(name: str, price: int, category: str, image_count: int, html_len: int) -> tuple[bool, str]:
+def _validate_payload(name: str, price: int, category: str, image_count: int) -> tuple[bool, str]:
     if not name or len(name) < 2:
         return False, "상품명이 너무 짧습니다 (최소 2자)"
     if len(name) > P.MAX_PRODUCT_NAME_LEN:
@@ -87,8 +97,6 @@ def _validate_payload(name: str, price: int, category: str, image_count: int, ht
         return False, f"카테고리 ID가 숫자 형식 아님 ({category})"
     if image_count < 1:
         return False, "이미지 없음"
-    if html_len < 10:
-        return False, "상세 HTML이 없거나 너무 짧음"
     return True, ""
 
 
@@ -129,22 +137,17 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
             "SELECT sale_krw, coupang_category_code FROM listings_pa WHERE product_id=? AND channel='coupang'",
             (product_id,),
         ).fetchone()
-        detail = conn.execute(
-            "SELECT html_content FROM detail_pages WHERE product_id=? ORDER BY updated_at DESC LIMIT 1",
-            (product_id,),
-        ).fetchone()
 
     raw_name = (p["title_ko"] or p["title_en"] or "").strip()
     name = _clean_product_name(raw_name)
     brand = _extract_brand(raw_name)
     price = int(listing["sale_krw"]) if listing and listing["sale_krw"] else int(p["sale_price_krw"] or 0)
     category = str(listing["coupang_category_code"]) if listing and listing["coupang_category_code"] else ""
-    desc_html = detail["html_content"] if detail and detail["html_content"] else ""
 
     if image_urls is None:
         image_urls = _get_product_images(product_id)
 
-    ok, err = _validate_payload(name, price, category, len(image_urls), len(desc_html))
+    ok, err = _validate_payload(name, price, category, len(image_urls))
     if not ok:
         logger.warning(f"[coupang] product {product_id} 검증 실패: {err}")
         return None
@@ -168,41 +171,20 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
             "vendorPath": url,
         })
 
-    # 상세 contents 구성 순서:
-    #   1) 상세페이지 이미지 (IMAGE_NO_SPACE 엔트리, 이미지당 1개) — 상세 영역 상단 노출
-    #   2) HTML 설명 블록 (contentsType=HTML + detailType=TEXT) — 이미지 하단 텍스트 설명
-    #
-    # 주의:
-    # - 쿠팡은 contentsType=HTML에서 inline style을 상당 부분 strip한다(스타일 반영 제한).
-    # - 네이버 톡톡 배너 블록은 쿠팡에 부적절하므로 제거.
-    # - HTML 내 <img src="/api/pa/images/..."> 는 절대 URL로 치환 (쿠팡 pull).
+    # 상세 contents 구성: 상품 이미지(동적) + 정적 정보 배너(전 상품 공통).
+    # 쿠팡은 contentsType=HTML에서 inline style 대부분 strip → 이미지 방식으로 통일.
+    # 배너 수정은 templates/coupang_banners_src/*.html 편집 후 render_coupang_banners.py 재실행.
+    base = PUBLIC_BASE_URL.rstrip("/")
     contents_payload = []
     for url in image_urls[:10]:
         contents_payload.append({
             "contentsType": "IMAGE_NO_SPACE",
             "contentDetails": [{"content": url, "detailType": "IMAGE", "altText": ""}],
         })
-
-    if desc_html:
-        base = PUBLIC_BASE_URL.rstrip("/")
-        # 이미지 경로 절대화
-        html = re.sub(
-            r'(<img[^>]+src=["\'])(/api/pa/images/[^"\']+)',
-            lambda m: f"{m.group(1)}{base}{m.group(2)}",
-            desc_html,
-        )
-        # 네이버 톡톡 배너 div 제거 (comment 기준 → 다음 div 시작 전까지)
-        html = re.sub(
-            r'<!--\s*네이버 톡톡 배너\s*-->.*?(?=<div)',
-            '',
-            html,
-            flags=re.DOTALL,
-        )
-        # 잔여 네이버 언급 치환
-        html = html.replace("네이버 톡톡", "채팅").replace("스토어 채팅", "판매자 채팅")
+    for rel in STATIC_BANNER_PATHS:
         contents_payload.append({
-            "contentsType": "HTML",
-            "contentDetails": [{"content": html, "detailType": "TEXT"}],
+            "contentsType": "IMAGE_NO_SPACE",
+            "contentDetails": [{"content": f"{base}{rel}", "detailType": "IMAGE", "altText": ""}],
         })
 
     payload = {
