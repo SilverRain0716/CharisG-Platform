@@ -19,14 +19,17 @@ ORIGIN_COUNTRY_CODE_COUPANG = "US"   # 쿠팡 countryCode
 
 # ── 배송 ─────────────────────────────────
 DELIVERY_COMPANY_NAVER = "CJGLS"     # 네이버 deliveryCompany
-DELIVERY_COMPANY_COUPANG = "CJGLS"   # 쿠팡 deliveryCompanyCode (검증: Phase 0-6)
+DELIVERY_COMPANY_COUPANG = "HANJIN"  # 쿠팡 deliveryCompanyCode (실제 운영 페이로드 캡처 확인)
 DELIVERY_FEE_TYPE = "FREE"
 
 # ── 반품 / 교환 ──────────────────────────
-RETURN_FEE = 5000
-EXCHANGE_FEE = 5000
-RETURN_CHARGE_NAME = "구매대행 반품"
-RETURN_CONTACT_NUMBER = AS_PHONE
+# 네이버는 smartstore_lister.py에 5000 하드코딩. 쿠팡 해외구매대행은 15000 (실제 캡처).
+NAVER_RETURN_FEE = 5000
+NAVER_EXCHANGE_FEE = 5000
+COUPANG_RETURN_FEE = 15000
+COUPANG_EXCHANGE_FEE = 15000
+RETURN_CHARGE_NAME = "US return"
+RETURN_CONTACT_NUMBER = "2015683865"  # 실제 쿠팡 등록 연락처 (US 현지번호)
 
 # ── 주문/판매 정책 ──────────────────────
 DEFAULT_STOCK = 100                  # 기본 재고 수량

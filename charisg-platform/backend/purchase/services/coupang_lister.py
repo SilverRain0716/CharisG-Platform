@@ -174,7 +174,7 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
         "deliveryChargeType": P.DELIVERY_FEE_TYPE,     # FREE
         "deliveryCharge": 0,
         "freeShipOverAmount": 0,
-        "deliveryChargeOnReturn": P.RETURN_FEE,
+        "deliveryChargeOnReturn": P.COUPANG_RETURN_FEE,
         "remoteAreaDeliverable": "N",
         "unionDeliveryType": "NOT_UNION_DELIVERY",
         "returnCenterCode": COUPANG_RETURN_CENTER_CODE,
@@ -183,7 +183,7 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
         "returnZipCode": "",       # Phase A-5 setup 후 자동 채움 (반품지에서)
         "returnAddress": "",
         "returnAddressDetail": "",
-        "returnCharge": P.RETURN_FEE,
+        "returnCharge": P.COUPANG_RETURN_FEE,
         "outboundShippingPlaceCode": COUPANG_OUTBOUND_SHIPPING_PLACE_CODE,
         "vendorUserId": "",        # caller에서 채워 넣음
         "requested": False,
@@ -193,7 +193,7 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
             "salePrice": price,
             "maximumBuyCount": P.DEFAULT_STOCK,
             "maximumBuyForPerson": 0,
-            "outboundShippingTimeDay": 8,           # 구매대행: 출고 8일 (해외)
+            "outboundShippingTimeDay": 4,           # 실제 캡처 확인값 (구매대행 해외)
             "maximumBuyForPersonPeriod": 1,
             "unitCount": 1,
             "adultOnly": "EVERYONE",
@@ -204,7 +204,7 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
             "externalVendorSku": f"PA-{product_id}",
             "barcode": "",
             "emptyBarcode": True,
-            "emptyBarcodeReason": "구매대행 상품으로 바코드 없음",
+            "emptyBarcodeReason": "COUPANG",
             "modelNo": name[:50],
             "extraProperties": {},
             "certifications": [],
