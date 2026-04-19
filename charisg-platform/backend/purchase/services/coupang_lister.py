@@ -168,13 +168,41 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
             "vendorPath": url,
         })
 
-    # 상세 contents — 캡처 기준 이미지 1장당 IMAGE_NO_SPACE 엔트리 1개.
-    # HTML은 쿠팡 validator가 거부(detailType=HTML 불가). 우선 이미지만 전송.
+    # 상세 contents 구성 순서:
+    #   1) 상세페이지 이미지 (IMAGE_NO_SPACE 엔트리, 이미지당 1개) — 상세 영역 상단 노출
+    #   2) HTML 설명 블록 (contentsType=HTML + detailType=TEXT) — 이미지 하단 텍스트 설명
+    #
+    # 주의:
+    # - 쿠팡은 contentsType=HTML에서 inline style을 상당 부분 strip한다(스타일 반영 제한).
+    # - 네이버 톡톡 배너 블록은 쿠팡에 부적절하므로 제거.
+    # - HTML 내 <img src="/api/pa/images/..."> 는 절대 URL로 치환 (쿠팡 pull).
     contents_payload = []
     for url in image_urls[:10]:
         contents_payload.append({
             "contentsType": "IMAGE_NO_SPACE",
             "contentDetails": [{"content": url, "detailType": "IMAGE", "altText": ""}],
+        })
+
+    if desc_html:
+        base = PUBLIC_BASE_URL.rstrip("/")
+        # 이미지 경로 절대화
+        html = re.sub(
+            r'(<img[^>]+src=["\'])(/api/pa/images/[^"\']+)',
+            lambda m: f"{m.group(1)}{base}{m.group(2)}",
+            desc_html,
+        )
+        # 네이버 톡톡 배너 div 제거 (comment 기준 → 다음 div 시작 전까지)
+        html = re.sub(
+            r'<!--\s*네이버 톡톡 배너\s*-->.*?(?=<div)',
+            '',
+            html,
+            flags=re.DOTALL,
+        )
+        # 잔여 네이버 언급 치환
+        html = html.replace("네이버 톡톡", "채팅").replace("스토어 채팅", "판매자 채팅")
+        contents_payload.append({
+            "contentsType": "HTML",
+            "contentDetails": [{"content": html, "detailType": "TEXT"}],
         })
 
     payload = {
@@ -231,9 +259,7 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
             "contents": contents_payload,
             "offerCondition": "NEW",
         }],
-        "requiredDocuments": [
-            {"templateName": "수입신고필증", "vendorDocumentPath": ""},
-        ],
+        "requiredDocuments": [],  # 구매대행은 구비서류 불필요. 빈 경로 전송 시 자동 반려됨.
         "extraInfoMessage": "",
         "manufactureName": brand,
     }
