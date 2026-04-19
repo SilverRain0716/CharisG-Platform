@@ -71,6 +71,9 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 COUPANG_ACCESS_KEY = os.environ.get("COUPANG_ACCESS_KEY", "")
 COUPANG_SECRET_KEY = os.environ.get("COUPANG_SECRET_KEY", "")
 COUPANG_VENDOR_ID = os.environ.get("COUPANG_VENDOR_ID", "")
+# 출고지/반품지 코드 — Phase A setup_coupang_logistics.py 1회 실행으로 발급/저장
+COUPANG_OUTBOUND_SHIPPING_PLACE_CODE = os.environ.get("COUPANG_OUTBOUND_SHIPPING_PLACE_CODE", "")
+COUPANG_RETURN_CENTER_CODE = os.environ.get("COUPANG_RETURN_CENTER_CODE", "")
 
 # Webshare proxy (DS crawler)
 PROXY_HOST = os.environ.get("PROXY_HOST", "")

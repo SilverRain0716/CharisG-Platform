@@ -5,6 +5,7 @@ bcrypt 토큰 인증, 상품 등록/수정/삭제. (스마트스토어 4/29 cust
 EC2 의존: NAVER_COMMERCE_CLIENT_ID/SECRET .env 필요.
 """
 import base64
+import copy
 import logging
 import os
 import threading
@@ -238,35 +239,79 @@ SKIP_ERROR_TYPES = {
 }
 
 
+def _extract_restricted_words(response_body: dict) -> set[str]:
+    """네이버 에러 응답에서 태그 등록불가 단어를 추출."""
+    import re as _re
+    words = set()
+    for inp in response_body.get("invalidInputs") or []:
+        msg = inp.get("message", "")
+        m = _re.search(r"등록불가인 단어\(([^)]+)\)", msg)
+        if m:
+            for w in m.group(1).split(","):
+                words.add(w.strip())
+    return words
+
+
 def register_product(payload: dict) -> Optional[dict]:
-    """상품 등록 (POST /v2/products). 스킵 대상 에러 시 {"_skip": reason} 반환."""
+    """상품 등록 (POST /v2/products). 태그 금지어 자동 재시도 + 스킵 대상 에러 처리.
+
+    재시도 중 payload를 직접 변경하므로 호출자 dict 보호를 위해 deepcopy한다.
+    """
     token = _get_token()
     if not token:
         return None
-    try:
-        r = _request_with_retry(
-            "POST",
-            BASE + "/v2/products",
-            json=payload,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30,
-        )
-        if r is None:
-            return None
-        if r.status_code >= 400:
+
+    payload = copy.deepcopy(payload)
+    for tag_attempt in range(4):
+        try:
+            r = _request_with_retry(
+                "POST",
+                BASE + "/v2/products",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+            if r is None:
+                return None
+            if r.status_code < 400:
+                return r.json()
+
             body = r.json() if r.text else {}
             inputs = body.get("invalidInputs") or []
+
+            # 스킵 대상 에러 (카테고리 제한 등)
             skip_reasons = [i["message"] for i in inputs if i.get("type") in SKIP_ERROR_TYPES]
             if skip_reasons:
                 reason = skip_reasons[0]
                 logger.warning(f"네이버 등록 스킵 (카테고리 제한): {reason}")
                 return {"_skip": reason}
+
+            # 태그 금지어 에러 → 금지어 제거 후 재시도
+            restricted = _extract_restricted_words(body)
+            da = payload.get("originProduct", {}).get("detailAttribute", {})
+            seo = da.get("seoInfo", {})
+            tags = seo.get("sellerTags", [])
+
+            if restricted and tags:
+                filtered = [t for t in tags if t["text"] not in restricted]
+                if filtered:
+                    seo["sellerTags"] = filtered
+                    logger.info(f"태그 금지어 {restricted} 제거 → {len(filtered)}개로 재시도")
+                    continue
+                else:
+                    # 태그 전부 금지 → seoInfo 제거 후 재시도
+                    da.pop("seoInfo", None)
+                    logger.info("태그 전부 금지 → 태그 없이 재시도")
+                    continue
+
             logger.error(f"네이버 상품 등록 실패: {r.status_code} {r.text[:200]}")
             return None
-        return r.json()
-    except Exception as e:
-        logger.error(f"네이버 등록 예외: {e}")
-        return None
+        except Exception as e:
+            logger.error(f"네이버 등록 예외: {e}")
+            return None
+
+    logger.error("네이버 등록 태그 재시도 초과")
+    return None
 
 
 def get_product(product_no: str) -> Optional[dict]:
@@ -286,6 +331,51 @@ def get_product(product_no: str) -> Optional[dict]:
         return r.json()
     except Exception:
         return None
+
+
+def get_addressbooks(page: int = 1, size: int = 20) -> Optional[dict]:
+    """셀러 주소록 조회 (출고지 RELEASE / 반품지 REFUND_OR_EXCHANGE / GENERAL).
+
+    응답 예: {"addressBooks": [{"addressBookNo": ..., "addressType": "RELEASE",
+                                "postalCode": ..., "baseAddress": ..., "detailAddress": ...,
+                                "phoneNumber1": ..., "phoneNumber2": ...,
+                                "roadNameAddress": bool, "overseasAddress": bool}, ...],
+             "page": 1, "totalPage": N}
+
+    권한: [판매자정보] 그룹 필수. 미부여 시 GW.AUTHN.
+    """
+    token = _get_token()
+    if not token:
+        return None
+    try:
+        r = _request_with_retry(
+            "GET",
+            BASE + f"/v1/seller/addressbooks-for-page?page={page}&size={size}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        if r is None or r.status_code >= 400:
+            logger.error(f"네이버 주소록 조회 실패: {r.status_code if r is not None else 'no-response'} {r.text[:200] if r is not None else ''}")
+            return None
+        return r.json()
+    except Exception as e:
+        logger.error(f"네이버 주소록 조회 예외: {e}")
+        return None
+
+
+def get_addressbook_by_type(address_type: str) -> Optional[dict]:
+    """RELEASE/REFUND_OR_EXCHANGE 중 첫 번째 매칭 항목 반환. 페이지를 끝까지 순회."""
+    page = 1
+    while True:
+        result = get_addressbooks(page=page)
+        if not result:
+            return None
+        for entry in result.get("addressBooks", []):
+            if entry.get("addressType") == address_type:
+                return entry
+        if page >= result.get("totalPage", 1):
+            return None
+        page += 1
 
 
 def update_product(product_no: str, partial: dict) -> Optional[dict]:

@@ -95,9 +95,9 @@ def _get_running_upload(channel: str) -> dict | None:
 
 
 async def _run_upload_background(job_id: str, product_ids: list[int], channel: str):
-    """2단계 파이프라인: Phase 1(이미지 사전 업로드) → Phase 2(상품 등록).
+    """3단계 파이프라인: Phase 1(이미지) → Phase 1.5(속성 추론) → Phase 2(등록).
 
-    배치 이미지 업로드로 상품당 API 호출을 11→2로 줄여 ~6배 속도 향상.
+    등록 전 완성: 상품명+이미지+속성+태그+브랜드를 모두 포함한 페이로드로 1회 등록.
     """
     import os
     concurrency = int(os.environ.get("SMARTSTORE_UPLOAD_CONCURRENCY", "4"))
@@ -127,10 +127,90 @@ async def _run_upload_background(job_id: str, product_ids: list[int], channel: s
                 image_map[pid] = []
 
     await asyncio.gather(*[preupload(pid) for pid in product_ids])
-    img_ok = sum(1 for v in image_map.values() if v)
-    logger.info(f"[{channel}-upload-all] Phase 1 완료 — 이미지 {img_ok}/{len(product_ids)}건 성공")
+    img_ok_ids = [pid for pid, urls in image_map.items() if urls]
+    logger.info(f"[{channel}-upload-all] Phase 1 완료 — 이미지 {len(img_ok_ids)}/{len(product_ids)}건 성공")
 
-    # ── Phase 2: 상품 등록 (이미지 URL 재사용 — 상품당 API 1회) ──
+    # ── Phase 1.5: 카테고리별 속성 AI 추론 (이미지 성공 + 미추론 상품만) ──
+    if img_ok_ids:
+        from backend.purchase.routers.smartstore_attributes import (
+            _get_attrs_with_values, _infer_batch_same_category, _map_ai_to_attrs,
+        )
+        from itertools import groupby
+        import json as _json
+
+        with get_db() as conn:
+            rows = conn.execute(
+                """SELECT id, category_path, title_ko, title_en FROM products
+                   WHERE inferred_attributes_json IS NULL AND id IN ({})""".format(
+                    ",".join("?" * len(img_ok_ids))
+                ),
+                img_ok_ids,
+            ).fetchall()
+        products_data = [dict(r) for r in rows]
+        products_data.sort(key=lambda p: p["category_path"] or "")
+
+        cached_count = len(img_ok_ids) - len(products_data)
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE batch_jobs SET phase_message=? WHERE id=?",
+                (f"Phase 1.5 속성 추론 시작 — 대상 {len(products_data)}건 (캐시 {cached_count}건)", job_id),
+            )
+
+        inferred_count = 0
+        skipped_no_cat = 0
+        skipped_no_attrs = 0
+        for cat_id, grp in groupby(products_data, key=lambda p: p["category_path"] or ""):
+            group = list(grp)
+            if not cat_id or not cat_id.isdigit():
+                skipped_no_cat += len(group)
+                continue
+            try:
+                attrs_with_values = _get_attrs_with_values(cat_id)
+            except Exception as e:
+                logger.warning(f"[{channel}-upload-all] cat={cat_id} 속성 메타 조회 실패: {e}")
+                continue
+            if not attrs_with_values:
+                skipped_no_attrs += len(group)
+                continue
+
+            for i in range(0, len(group), 10):
+                batch = group[i:i + 10]
+                try:
+                    ai_results = await _infer_batch_same_category(batch, attrs_with_values)
+                except Exception as e:
+                    logger.warning(f"[{channel}-upload-all] cat={cat_id} 배치 추론 실패: {e}")
+                    continue
+                for p in batch:
+                    pid = p["id"]
+                    mapped = _map_ai_to_attrs(ai_results.get(pid, []), attrs_with_values)
+                    # 매핑 성공: 결과 저장 / 실패: 빈 배열로 마킹하여 다음 실행 시 재추론 방지
+                    payload_json = _json.dumps(mapped) if mapped else "[]"
+                    with get_db() as conn:
+                        conn.execute(
+                            "UPDATE products SET inferred_attributes_json=? WHERE id=?",
+                            (payload_json, pid),
+                        )
+                    if mapped:
+                        inferred_count += 1
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE batch_jobs SET phase_message=? WHERE id=?",
+                        (f"Phase 1.5 진행 — 추론 {inferred_count}건", job_id),
+                    )
+                await asyncio.sleep(1)  # Gemini rate limit
+
+        logger.info(
+            f"[{channel}-upload-all] Phase 1.5 완료 — 추론 {inferred_count}, "
+            f"캐시 {cached_count}, 카테고리X {skipped_no_cat}, 속성X {skipped_no_attrs}"
+        )
+
+    # ── Phase 2: 완성 페이로드로 상품 등록 ──
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE batch_jobs SET phase_message=? WHERE id=?",
+            (f"Phase 2 등록 진행 — 대상 {len(product_ids)}건", job_id),
+        )
+
     async def register(pid: int):
         nonlocal processed, errors, skipped
         urls = image_map.get(pid, [])
@@ -170,8 +250,9 @@ async def _run_upload_background(job_id: str, product_ids: list[int], channel: s
     with get_db() as conn:
         conn.execute(
             """UPDATE batch_jobs SET status='done', processed=?, errors=?, finished_at=?,
-               current_product_id=NULL WHERE id=?""",
-            (processed, errors, _now_iso(), job_id),
+               current_product_id=NULL, phase_message=? WHERE id=?""",
+            (processed, errors, _now_iso(),
+             f"완료 — 성공 {processed}, 제외 {skipped}, 실패 {errors}", job_id),
         )
     logger.info(f"[{channel}-upload-all] 완료 — 성공 {processed}, 제외 {skipped}, 실패 {errors}/{len(product_ids)}")
 

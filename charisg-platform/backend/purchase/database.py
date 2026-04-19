@@ -40,4 +40,8 @@ def init_db() -> None:
         (5, migrations_dir / "schema_pa_v5.sql", "products SEO columns + detail_pages html/market/platform"),
         (6, migrations_dir / "schema_pa_v6.sql", "sourcing_candidates image_url column"),
         (7, migrations_dir / "schema_pa_v7.sql", "batch_jobs for background AI processing"),
+        (8, migrations_dir / "schema_pa_v8.sql", "listings_pa real margin fields"),
+        (9, migrations_dir / "schema_pa_v9.sql", "inferred_attributes_json + batch_jobs phase_message"),
+        (10, migrations_dir / "schema_pa_v10.sql", "coupang_categories tree + listings_pa coupang_category_code"),
+        (11, migrations_dir / "schema_pa_v11.sql", "naver_coupang_category_map (3-stage auto-map)"),
     ])

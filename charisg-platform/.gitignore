@@ -35,3 +35,11 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code 로컬 설정 (사용자별)
+.claude/
+permissions.json
+
+# 백엔드 캐시/이미지 (대용량, 운영 EC2에서 관리)
+backend/purchase/media/
+**/charisg-deploy-backups/
