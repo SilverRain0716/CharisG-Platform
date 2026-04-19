@@ -145,12 +145,17 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
             "SELECT sale_krw, coupang_category_code FROM listings_pa WHERE product_id=? AND channel='coupang'",
             (product_id,),
         ).fetchone()
+        cat_path_row = conn.execute(
+            "SELECT path FROM coupang_categories WHERE code=? LIMIT 1",
+            (listing["coupang_category_code"] if listing else None,),
+        ).fetchone() if listing else None
 
     raw_name = (p["title_ko"] or p["title_en"] or "").strip()
     name = _clean_product_name(raw_name)
     brand = _extract_brand(raw_name)
     price = int(listing["sale_krw"]) if listing and listing["sale_krw"] else int(p["sale_price_krw"] or 0)
     category = str(listing["coupang_category_code"]) if listing and listing["coupang_category_code"] else ""
+    cat_path = cat_path_row["path"] if cat_path_row else ""
 
     if image_urls is None:
         image_urls = _get_product_images(product_id)
@@ -163,7 +168,14 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
     # 카테고리 메타 prefetch (notices + MANDATORY 속성 자동 채움)
     meta = get_category_meta(category)
     notices = build_default_notices(meta) if meta else []
-    attributes = build_required_attributes(meta, dict(p)) if meta else []
+    if meta:
+        attributes, skip_reason = build_required_attributes(meta, dict(p), cat_path=cat_path)
+        if skip_reason:
+            # 속성 추출 실패 — 페이로드 자체를 만들지 말고 skip 신호 반환.
+            # list_product가 이를 감지해 excluded 처리.
+            return {"_skip": skip_reason}
+    else:
+        attributes = []
 
     # 판매 시작/종료
     now = datetime.now(timezone.utc)
@@ -311,6 +323,17 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
     payload = build_payload(product_id, image_urls=image_urls)
     if not payload:
         return {"ok": False, "error": f"product {product_id}: 페이로드 생성 실패"}
+
+    # build_payload가 _skip 반환하면 pre-API 단계에서 excluded 처리
+    if isinstance(payload, dict) and payload.get("_skip") and "displayCategoryCode" not in payload:
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE listings_pa SET status='excluded', error_message=?,
+                   last_synced_at=CURRENT_TIMESTAMP
+                   WHERE product_id=? AND channel='coupang'""",
+                (payload["_skip"], product_id),
+            )
+        return {"ok": False, "skip": True, "error": payload["_skip"]}
 
     result = register_product(payload)
     if not result:
