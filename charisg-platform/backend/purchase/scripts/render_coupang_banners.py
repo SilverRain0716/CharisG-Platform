@@ -26,7 +26,8 @@ OUT_DIR = ROOT / "media" / "banners"
 BANNERS = [
     ("banner_1_brand.html", "banner_1_brand.jpg"),
     ("banner_2_shipping.html", "banner_2_shipping.jpg"),
-    ("banner_3_policy.html", "banner_3_policy.jpg"),
+    ("banner_3_amazon.html", "banner_3_amazon.jpg"),
+    ("banner_4_purchase_notice.html", "banner_4_purchase_notice.jpg"),
 ]
 
 

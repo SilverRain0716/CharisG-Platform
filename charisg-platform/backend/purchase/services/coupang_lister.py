@@ -61,7 +61,8 @@ def _extract_brand(name: str) -> str:
 STATIC_BANNER_PATHS = (
     "/api/pa/images/banners/banner_1_brand.jpg",
     "/api/pa/images/banners/banner_2_shipping.jpg",
-    "/api/pa/images/banners/banner_3_policy.jpg",
+    "/api/pa/images/banners/banner_3_amazon.jpg",
+    "/api/pa/images/banners/banner_4_purchase_notice.jpg",
 )
 
 
@@ -104,11 +105,13 @@ def _validate_payload(name: str, price: int, category: str, image_count: int) ->
 def _get_product_images(product_id: int) -> list[str]:
     """상품 이미지 URL 목록 — public_url을 PUBLIC_BASE_URL 절대 경로로 변환해 반환.
 
-    쿠팡은 외부 https URL을 그대로 pull하므로 CharisG가 서빙하는 이미지 경로를 쓴다.
-    image_cache 행은 있는데 실제 disk 파일이 없는 경우(mark_for_deletion 등)가 있어
-    **local_path 실파일 존재 여부를 사전 검증**한다. 누락된 URL은 버림.
+    필터링:
+    - 로컬 파일 존재하지 않으면 제외 (쿠팡 pull 실패)
+    - 이미지 **가로/세로 500px 미만**이면 제외 (쿠팡 최소 스펙 위반 반려)
     """
     import os
+    from PIL import Image
+
     with get_db() as conn:
         rows = conn.execute(
             """SELECT public_url, local_path FROM image_cache
@@ -123,9 +126,18 @@ def _get_product_images(product_id: int) -> list[str]:
         lp = r["local_path"]
         if not pu:
             continue
-        # 로컬 파일이 실제 존재해야 쿠팡이 pull 성공.
         if lp and not os.path.isfile(lp):
             continue
+        # 500x500 최소 스펙 검증 — Coupang 상세 이미지 요구사항
+        if lp:
+            try:
+                with Image.open(lp) as im:
+                    w, h = im.size
+                if w < 500 or h < 500:
+                    continue
+            except Exception:
+                # 이미지 열기 실패 → 불안정한 파일, 제외
+                continue
         urls.append(pu if pu.startswith("http") else f"{base}{pu}")
     return urls
 
