@@ -354,16 +354,30 @@ async def download_product_images(product_id: int, images_json: str) -> dict:
     }
 
 
-# ── 삭제 예약 (채널 등록 완료 시) ────────────────
+# ── 삭제 예약 (전 채널 등록 완료 시) ────────────────
 
 def mark_images_for_deletion(product_id: int):
-    """채널 업로드 완료 → 즉시 삭제 예약."""
+    """모든 대상 채널 업로드 완료 시에만 삭제 예약.
+
+    정책 (2026-04-20 변경):
+      - 하나의 채널이 성공했더라도 다른 채널이 pending이면 삭제 보류.
+      - 이미지가 먼저 삭제되면 나머지 채널이 '이미지 파일 없음'으로 excluded됨.
+      - 모든 listings_pa row가 terminal 상태(listed/excluded)일 때만 삭제 예약.
+    """
     with get_db() as conn:
+        still_pending = conn.execute(
+            """SELECT COUNT(*) AS c FROM listings_pa
+               WHERE product_id=? AND status NOT IN ('listed', 'excluded')""",
+            (product_id,),
+        ).fetchone()
+        if still_pending and still_pending["c"] > 0:
+            logger.info(f"⏸️ 이미지 삭제 보류: product {product_id} — pending 채널 {still_pending['c']}개 남음")
+            return
         conn.execute(
             "UPDATE image_cache SET scheduled_delete_at=? WHERE product_id=?",
             (_now_iso(), product_id),
         )
-    logger.info(f"🗑️ 이미지 삭제 예약: product {product_id}")
+    logger.info(f"🗑️ 이미지 삭제 예약: product {product_id} (전 채널 완료)")
 
 
 # ── 만료 이미지 정리 ─────────────────────────────
