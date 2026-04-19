@@ -122,13 +122,10 @@ def build_required_attributes(meta: Optional[dict], product: Optional[dict] = No
         if input_type == "SELECT" and input_values:
             v0 = input_values[0]
             value = v0.get("attributeValueName") if isinstance(v0, dict) else str(v0)
-        # 2) INPUT + STRING + 제목 기반 추출 (색상/사이즈만 시도)
-        if not value and input_type == "INPUT" and data_type == "STRING":
-            if "색상" in name or "컬러" in name:
-                value = _extract_color(title) or ""
-            elif "사이즈" in name and "각" not in name:  # "사이즈별" 같은 메타는 제외
-                value = _extract_size(title) or ""
-        # 3) 휴리스틱 기본값 (NUMBER는 basicUnit 포함)
+        # 2) 휴리스틱 기본값만 사용.
+        #    제목 기반 추출은 제거 — 쿠팡 validator가 "상품명과 옵션 중복 단어" 경고를 띄워
+        #    승인요청이 차단되는 문제 발생. 캡처 페이로드도 '단일색상'/'프리사이즈' 같은
+        #    일반값을 사용.
         if not value:
             value = _default_for_name(name, data_type, basic_unit)
         if not value:
