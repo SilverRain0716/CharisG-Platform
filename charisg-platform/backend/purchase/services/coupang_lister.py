@@ -17,6 +17,7 @@ from backend.purchase.database import get_db
 from backend.purchase.services.coupang_service import register_product
 from backend.purchase.services import policy_constants as P
 from backend.purchase.services.coupang_meta import get_category_meta, build_default_notices
+from backend.purchase.services.coupang_attributes import build_required_attributes
 from backend_shared._config import (
     COUPANG_VENDOR_ID,
     COUPANG_USER_ID,
@@ -152,9 +153,10 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
         logger.warning(f"[coupang] product {product_id} 검증 실패: {err}")
         return None
 
-    # 카테고리 메타 prefetch (notices 자동 채움)
+    # 카테고리 메타 prefetch (notices + MANDATORY 속성 자동 채움)
     meta = get_category_meta(category)
     notices = build_default_notices(meta) if meta else []
+    attributes = build_required_attributes(meta, dict(p)) if meta else []
 
     # 판매 시작/종료
     now = datetime.now(timezone.utc)
@@ -237,7 +239,7 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
             "searchTags": [],
             "images": images_payload,
             "notices": notices,
-            "attributes": [],
+            "attributes": attributes,
             "contents": contents_payload,
             "offerCondition": "NEW",
         }],
