@@ -105,10 +105,13 @@ def _get_product_images(product_id: int) -> list[str]:
     """상품 이미지 URL 목록 — public_url을 PUBLIC_BASE_URL 절대 경로로 변환해 반환.
 
     쿠팡은 외부 https URL을 그대로 pull하므로 CharisG가 서빙하는 이미지 경로를 쓴다.
+    image_cache 행은 있는데 실제 disk 파일이 없는 경우(mark_for_deletion 등)가 있어
+    **local_path 실파일 존재 여부를 사전 검증**한다. 누락된 URL은 버림.
     """
+    import os
     with get_db() as conn:
         rows = conn.execute(
-            """SELECT public_url FROM image_cache
+            """SELECT public_url, local_path FROM image_cache
                WHERE product_id=? AND public_url IS NOT NULL
                ORDER BY image_idx ASC""",
             (product_id,),
@@ -117,7 +120,11 @@ def _get_product_images(product_id: int) -> list[str]:
     urls = []
     for r in rows:
         pu = r["public_url"]
+        lp = r["local_path"]
         if not pu:
+            continue
+        # 로컬 파일이 실제 존재해야 쿠팡이 pull 성공.
+        if lp and not os.path.isfile(lp):
             continue
         urls.append(pu if pu.startswith("http") else f"{base}{pu}")
     return urls
