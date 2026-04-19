@@ -144,10 +144,12 @@ def register_product(payload: dict) -> Optional[dict]:
         )
         if r is None:
             return None
-        if r.status_code < 400:
-            return r.json()
-
         body = r.json() if r.text else {}
+
+        # 쿠팡은 HTTP 200에 body.code='ERROR' 패턴으로 실패를 돌려주기도 함.
+        if r.status_code < 400 and isinstance(body, dict) and body.get("code") != "ERROR":
+            return body
+
         msgs = _extract_error_messages(body)
         skip_msgs = [m for m in msgs if _is_skippable_message(m)]
         if skip_msgs:
@@ -155,8 +157,9 @@ def register_product(payload: dict) -> Optional[dict]:
             logger.warning(f"쿠팡 등록 스킵 (카테고리 제한): {reason}")
             return {"_skip": reason}
 
-        logger.error(f"쿠팡 상품 등록 실패: {r.status_code} {r.text[:300]}")
-        return None
+        err_summary = "; ".join(msgs) if msgs else r.text[:300]
+        logger.error(f"쿠팡 상품 등록 실패: status={r.status_code} code={body.get('code') if isinstance(body, dict) else None} {err_summary}")
+        return {"_error": err_summary}
     except Exception as e:
         logger.error(f"쿠팡 등록 예외: {e}")
         return None

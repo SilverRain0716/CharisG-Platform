@@ -19,8 +19,10 @@ from backend.purchase.services import policy_constants as P
 from backend.purchase.services.coupang_meta import get_category_meta, build_default_notices
 from backend_shared._config import (
     COUPANG_VENDOR_ID,
+    COUPANG_USER_ID,
     COUPANG_OUTBOUND_SHIPPING_PLACE_CODE,
     COUPANG_RETURN_CENTER_CODE,
+    PUBLIC_BASE_URL,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,15 +93,25 @@ def _validate_payload(name: str, price: int, category: str, image_count: int, ht
 
 
 def _get_product_images(product_id: int) -> list[str]:
-    """상품 이미지 URL 목록 (스마트스토어 사전업로드 결과 재사용)."""
+    """상품 이미지 URL 목록 — public_url을 PUBLIC_BASE_URL 절대 경로로 변환해 반환.
+
+    쿠팡은 외부 https URL을 그대로 pull하므로 CharisG가 서빙하는 이미지 경로를 쓴다.
+    """
     with get_db() as conn:
         rows = conn.execute(
-            """SELECT external_url FROM image_cache
-               WHERE product_id=? AND external_url IS NOT NULL
-               ORDER BY ord ASC""",
+            """SELECT public_url FROM image_cache
+               WHERE product_id=? AND public_url IS NOT NULL
+               ORDER BY image_idx ASC""",
             (product_id,),
         ).fetchall()
-    return [r["external_url"] for r in rows if r["external_url"]]
+    base = PUBLIC_BASE_URL.rstrip("/")
+    urls = []
+    for r in rows:
+        pu = r["public_url"]
+        if not pu:
+            continue
+        urls.append(pu if pu.startswith("http") else f"{base}{pu}")
+    return urls
 
 
 # ── 페이로드 빌드 ──────────────────────────────────────────────
@@ -114,7 +126,7 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
         if not p:
             return None
         listing = conn.execute(
-            "SELECT sale_krw, category_mapped FROM listings_pa WHERE product_id=? AND channel='coupang'",
+            "SELECT sale_krw, coupang_category_code FROM listings_pa WHERE product_id=? AND channel='coupang'",
             (product_id,),
         ).fetchone()
         detail = conn.execute(
@@ -126,7 +138,7 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
     name = _clean_product_name(raw_name)
     brand = _extract_brand(raw_name)
     price = int(listing["sale_krw"]) if listing and listing["sale_krw"] else int(p["sale_price_krw"] or 0)
-    category = listing["category_mapped"] if listing else ""
+    category = str(listing["coupang_category_code"]) if listing and listing["coupang_category_code"] else ""
     desc_html = detail["html_content"] if detail and detail["html_content"] else ""
 
     if image_urls is None:
@@ -146,20 +158,24 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
     sale_started_at = now.strftime("%Y-%m-%dT%H:%M:%S")
     sale_ended_at = (now + timedelta(days=365 * 5)).strftime("%Y-%m-%dT%H:%M:%S")
 
-    # 이미지 — 첫 1개 REPRESENTATION, 나머지 ≤8 DETAIL
+    # 이미지 — 첫 1개 REPRESENTATION, 나머지 ≤8 DETAIL.
+    # 실제 캡처는 vendorPath 키 사용 (vendorImagePath 아님).
     images_payload = []
     for i, url in enumerate(image_urls[:9]):
         images_payload.append({
             "imageOrder": i,
             "imageType": "REPRESENTATION" if i == 0 else "DETAIL",
-            "vendorImagePath": url,
+            "vendorPath": url,
         })
 
-    # 상세 contents
-    contents_payload = [{
-        "contentsType": "TEXT",
-        "contentDetails": [{"content": desc_html, "detailType": "HTML"}],
-    }]
+    # 상세 contents — 캡처 기준 이미지 1장당 IMAGE_NO_SPACE 엔트리 1개.
+    # HTML은 쿠팡 validator가 거부(detailType=HTML 불가). 우선 이미지만 전송.
+    contents_payload = []
+    for url in image_urls[:10]:
+        contents_payload.append({
+            "contentsType": "IMAGE_NO_SPACE",
+            "contentDetails": [{"content": url, "detailType": "IMAGE", "altText": ""}],
+        })
 
     payload = {
         "displayCategoryCode": int(category),
@@ -180,12 +196,12 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
         "returnCenterCode": COUPANG_RETURN_CENTER_CODE,
         "returnChargeName": P.RETURN_CHARGE_NAME,
         "companyContactNumber": P.RETURN_CONTACT_NUMBER,
-        "returnZipCode": "",       # Phase A-5 setup 후 자동 채움 (반품지에서)
-        "returnAddress": "",
-        "returnAddressDetail": "",
+        "returnZipCode": P.RETURN_ZIP_CODE,
+        "returnAddress": P.RETURN_ADDRESS,
+        "returnAddressDetail": P.RETURN_ADDRESS_DETAIL,
         "returnCharge": P.COUPANG_RETURN_FEE,
         "outboundShippingPlaceCode": COUPANG_OUTBOUND_SHIPPING_PLACE_CODE,
-        "vendorUserId": "",        # caller에서 채워 넣음
+        "vendorUserId": COUPANG_USER_ID or COUPANG_VENDOR_ID,  # WING 로그인 계정 ID
         "requested": False,
         "items": [{
             "itemName": name[:50],
@@ -247,7 +263,7 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
     """
     with get_db() as conn:
         existing = conn.execute(
-            """SELECT channel_product_id, category_mapped FROM listings_pa
+            """SELECT channel_product_id, coupang_category_code FROM listings_pa
                WHERE product_id=? AND channel='coupang'""",
             (product_id,),
         ).fetchone()
@@ -255,15 +271,16 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
         return {"ok": False, "skip": True,
                 "error": f"이미 등록됨 (channel_product_id={existing['channel_product_id']})"}
 
-    # 사전 카테고리 차단 (categoryMaster 또는 products.category_path로 키워드 검사)
-    if existing:
+    # 사전 카테고리 차단 (coupang_categories.path 기준 키워드 검사)
+    if existing and existing["coupang_category_code"]:
         with get_db() as conn:
             cat_name_row = conn.execute(
-                "SELECT category_name FROM category_master WHERE category_id=? LIMIT 1",
-                (existing["category_mapped"],),
+                "SELECT name, path FROM coupang_categories WHERE code=? LIMIT 1",
+                (existing["coupang_category_code"],),
             ).fetchone()
         if cat_name_row:
-            blocked, kw = _is_prohibited_category(cat_name_row["category_name"])
+            cat_text = f"{cat_name_row['path'] or ''} {cat_name_row['name'] or ''}"
+            blocked, kw = _is_prohibited_category(cat_text)
             if blocked:
                 with get_db() as conn:
                     conn.execute(
@@ -291,6 +308,16 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
                 (result["_skip"], product_id),
             )
         return {"ok": False, "skip": True, "error": result["_skip"]}
+
+    if result.get("_error"):
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE listings_pa SET status='pending', error_message=?,
+                   last_synced_at=CURRENT_TIMESTAMP
+                   WHERE product_id=? AND channel='coupang'""",
+                (result["_error"][:500], product_id),
+            )
+        return {"ok": False, "error": result["_error"]}
 
     seller_product_id = str(result.get("data", "") if isinstance(result, dict) else "")
     with get_db() as conn:

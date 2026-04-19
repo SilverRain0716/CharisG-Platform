@@ -30,6 +30,10 @@ COUPANG_RETURN_FEE = 15000
 COUPANG_EXCHANGE_FEE = 15000
 RETURN_CHARGE_NAME = "US return"
 RETURN_CONTACT_NUMBER = "2015683865"  # 실제 쿠팡 등록 연락처 (US 현지번호)
+# 반품지 주소 (쿠팡 API는 returnCenterCode 외에 풀 주소 필드도 요구)
+RETURN_ZIP_CODE = "000-000"
+RETURN_ADDRESS = "100 Temple Ave, NJ"
+RETURN_ADDRESS_DETAIL = "KO81304"
 
 # ── 주문/판매 정책 ──────────────────────
 DEFAULT_STOCK = 100                  # 기본 재고 수량

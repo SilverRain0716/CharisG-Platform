@@ -125,12 +125,12 @@ async def _run_coupang_upload_bg(job_id: str, product_ids: list[int]):
     with get_db() as conn:
         placeholders = ",".join("?" * len(product_ids))
         cat_rows = conn.execute(
-            f"""SELECT DISTINCT category_mapped FROM listings_pa
+            f"""SELECT DISTINCT coupang_category_code FROM listings_pa
                 WHERE channel='coupang' AND product_id IN ({placeholders})
-                AND category_mapped IS NOT NULL AND category_mapped != ''""",
+                AND coupang_category_code IS NOT NULL""",
             product_ids,
         ).fetchall()
-    unique_cats = [r["category_mapped"] for r in cat_rows]
+    unique_cats = [str(r["coupang_category_code"]) for r in cat_rows]
 
     with get_db() as conn:
         conn.execute(

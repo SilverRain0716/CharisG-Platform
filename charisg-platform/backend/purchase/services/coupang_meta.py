@@ -71,28 +71,34 @@ def extract_notice_category_names(meta: dict) -> list[str]:
     return names
 
 
-def build_default_notices(meta: dict, fallback_value: str = "상세설명 참조") -> list[dict]:
+def build_default_notices(meta: dict, fallback_value: str = "상품 상세페이지 참조") -> list[dict]:
     """카테고리고시 페이로드를 디폴트값으로 일괄 생성.
 
-    응답: [{"noticeCategoryName": ..., "noticeCategoryDetailName": ..., "content": fallback_value}, ...]
+    ⚠️ 카테고리가 여러 noticeCategoryName을 제공하는 경우(예: '어린이제품' + '스포츠용품'),
+       쿠팡 validator는 정확히 ONE 선택을 요구(2 subschemas matched 에러). 따라서
+       **첫 번째 noticeCategory 만** 사용한다. 추후 카테고리별 매핑 규칙이 필요하면
+       이 함수를 확장.
 
-    실 운영에서 정확한 값이 필요한 항목(원산지, KC 인증번호 등)은 별도 매핑 필요.
+    응답: [{"noticeCategoryName": ..., "noticeCategoryDetailName": ..., "content": fallback_value}, ...]
     """
     notices = meta.get("noticeCategories") or []
+    if not notices:
+        return []
+    first = notices[0]
+    if not isinstance(first, dict):
+        return []
+    cat_name = first.get("noticeCategoryName")
+    if not cat_name:
+        return []
     result = []
-    for n in notices:
-        if not isinstance(n, dict):
-            continue
-        cat_name = n.get("noticeCategoryName")
-        details = n.get("noticeCategoryDetailNames") or []
-        for d in details:
-            detail_name = d.get("noticeCategoryDetailName") if isinstance(d, dict) else d
-            if cat_name and detail_name:
-                result.append({
-                    "noticeCategoryName": cat_name,
-                    "noticeCategoryDetailName": detail_name,
-                    "content": fallback_value,
-                })
+    for d in first.get("noticeCategoryDetailNames") or []:
+        detail_name = d.get("noticeCategoryDetailName") if isinstance(d, dict) else d
+        if detail_name:
+            result.append({
+                "noticeCategoryName": cat_name,
+                "noticeCategoryDetailName": detail_name,
+                "content": fallback_value,
+            })
     return result
 
 

@@ -71,6 +71,8 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 COUPANG_ACCESS_KEY = os.environ.get("COUPANG_ACCESS_KEY", "")
 COUPANG_SECRET_KEY = os.environ.get("COUPANG_SECRET_KEY", "")
 COUPANG_VENDOR_ID = os.environ.get("COUPANG_VENDOR_ID", "")
+# WING 로그인 사용자 ID (vendorUserId 용). vendor_id와 다른 별도 값.
+COUPANG_USER_ID = os.environ.get("COUPANG_USER_ID", "")
 # 출고지/반품지 코드 — Phase A setup_coupang_logistics.py 1회 실행으로 발급/저장
 COUPANG_OUTBOUND_SHIPPING_PLACE_CODE = os.environ.get("COUPANG_OUTBOUND_SHIPPING_PLACE_CODE", "")
 COUPANG_RETURN_CENTER_CODE = os.environ.get("COUPANG_RETURN_CENTER_CODE", "")
@@ -91,3 +93,7 @@ AUTH_BYPASS = os.environ.get("CTRL_AUTH_BYPASS", "false").lower() == "true"
 
 # 환율 API
 EXCHANGE_RATE_API = os.environ.get("EXCHANGE_RATE_API", "")
+
+# 공개 베이스 URL (이미지 등 외부에서 pull 가능한 HTTPS origin)
+# 쿠팡이 image_cache.public_url(/api/pa/images/...)을 pull할 때 절대 URL로 변환.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://wongbigo.com")
