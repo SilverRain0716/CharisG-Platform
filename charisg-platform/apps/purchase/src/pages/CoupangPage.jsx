@@ -44,7 +44,9 @@ export default function CoupangPage() {
         const done = job.status === 'done' || job.status === 'error';
         setUploadProgress({
           pct: job.pct ?? 0, processed: job.processed, errors: job.errors,
-          total: job.total, status: job.status, message: job.error_message,
+          total: job.total, status: job.status,
+          message: job.error_message,
+          phaseMessage: job.phase_message,
         });
         if (done) {
           jobIdRef.current = null;
@@ -65,6 +67,7 @@ export default function CoupangPage() {
           setUploadProgress({
             pct: res.job.pct ?? 0, processed: res.job.processed, errors: res.job.errors,
             total: res.job.total, status: res.job.status,
+            phaseMessage: res.job.phase_message,
           });
         }
       } catch {}
@@ -143,6 +146,9 @@ export default function CoupangPage() {
                 style={{ width: `${uploadProgress.pct ?? 0}%` }}
               />
             </div>
+            {uploadProgress.phaseMessage && (
+              <p className="text-xs text-ink-500">{uploadProgress.phaseMessage}</p>
+            )}
           </div>
         </Card>
       )}
