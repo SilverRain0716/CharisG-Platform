@@ -43,3 +43,6 @@ permissions.json
 # 백엔드 캐시/이미지 (대용량, 운영 EC2에서 관리)
 backend/purchase/media/
 **/charisg-deploy-backups/
+
+# 런타임 캐시 (Amazon KR 쿠키 등)
+.cache/
