@@ -35,6 +35,7 @@ import uuid
 from datetime import datetime, timezone
 
 from backend.purchase.database import DB_PATH, get_db
+from backend.purchase.services.exchange_rate_service import get_current_rate
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ async def run_promote_background(job_id: str) -> None:
         conn_read.row_factory = sqlite3.Row
         try:
             rows = conn_read.execute(
-                "SELECT id, asin, title, price_usd, image_url FROM sourcing_candidates"
+                "SELECT id, asin, title, price_usd, price_krw, image_url FROM sourcing_candidates"
             ).fetchall()
         finally:
             conn_read.close()
@@ -144,6 +145,9 @@ async def run_promote_background(job_id: str) -> None:
             sheet_title = r["title"]
             sheet_image = r["image_url"]
             cost_usd = r["price_usd"]
+            if cost_usd is None and r["price_krw"] is not None:
+                # KRW-only 후보 — 환율로 USD 대체값 산출 (downstream 은 USD 계약 유지)
+                cost_usd = r["price_krw"] / get_current_rate()
 
             if asin:
                 try:

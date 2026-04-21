@@ -7,8 +7,12 @@ import { pa } from '../api/pa.js';
 const COLS = [
   { key: 'asin', label: 'ASIN', width: '110px' },
   { key: 'title', label: '상품명', wrap: true, maxWidth: '320px' },
-  { key: 'price_usd', label: '$', sortable: true, width: '80px',
-    render: (v) => v != null ? '$' + Number(v).toFixed(2) : '—' },
+  { key: 'price_usd', label: '가격', sortable: true, width: '110px',
+    render: (v, row) => {
+      if (row.price_krw != null) return '₩' + Number(row.price_krw).toLocaleString();
+      if (v != null) return '$' + Number(v).toFixed(2);
+      return '—';
+    } },
   { key: 'rating', label: '★', width: '60px',
     render: (v) => v != null ? Number(v).toFixed(1) : '—' },
   { key: 'review_count', label: '리뷰', sortable: true, width: '80px',

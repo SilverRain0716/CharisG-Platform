@@ -45,4 +45,6 @@ def init_db() -> None:
         (10, migrations_dir / "schema_pa_v10.sql", "coupang_categories tree + listings_pa coupang_category_code"),
         (11, migrations_dir / "schema_pa_v11.sql", "naver_coupang_category_map (3-stage auto-map)"),
         (12, migrations_dir / "schema_pa_v12.sql", "listings_pa approval_requested_at (coupang saveV2→approval flow)"),
+        (13, migrations_dir / "schema_pa_v13.sql", "orders expansion: customs/sku/paid_at + EN translation + shipping_method"),
+        (14, migrations_dir / "schema_pa_v14.sql", "sourcing_candidates price_krw column"),
     ])

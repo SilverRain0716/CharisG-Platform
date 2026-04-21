@@ -37,7 +37,8 @@ def list_candidates(
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     with get_db() as conn:
         rows = conn.execute(
-            f"""SELECT id, keyword_id, asin, title, amazon_url, image_url, price_usd,
+            f"""SELECT id, keyword_id, asin, title, amazon_url, image_url,
+                       price_usd, price_krw,
                        rating, review_count, monthly_sales, category, notes,
                        in_stock, cj_filter_pass, shipping_status, sourcing_status,
                        collected_at

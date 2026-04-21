@@ -40,6 +40,7 @@ HEADER_ALIASES = {
     "title":         ["상품명", "title", "product_name", "product"],
     "amazon_url":    ["상품 url", "amazon_url", "url", "상품URL", "상품url"],
     "price_usd":     ["가격($)", "가격", "price", "price_usd", "가격(USD)"],
+    "price_krw":     ["가격(KRW)", "가격(원)", "price_krw", "금액(KRW)", "가격(W)"],
     "rating":        ["별점", "rating", "stars"],
     "review_count":  ["리뷰수", "reviews", "review_count", "리뷰 수"],
     "monthly_sales": ["월판매량", "monthly_sales", "월 판매량"],
@@ -118,13 +119,40 @@ def fetch_tab_csv(sheet_id: str, gid: int) -> list[dict]:
 
 
 def _pick(row: dict, keys: list[str]) -> str:
-    # 헤더 대소문자/공백 차이를 흡수
-    normalized = {(k or "").strip().lower(): v for k, v in row.items()}
+    # 헤더 대소문자/공백/내부 줄바꿈 차이를 흡수 ("가격\n(KRW)" → "가격(krw)")
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", "", s or "").lower()
+    normalized = {_norm(k): v for k, v in row.items()}
     for k in keys:
-        v = normalized.get(k.strip().lower())
+        v = normalized.get(_norm(k))
         if v is not None and str(v).strip():
             return str(v).strip()
     return ""
+
+
+def _parse_price(raw: str) -> tuple[Optional[float], Optional[str]]:
+    """값 → (float, currency). currency ∈ {'USD','KRW',None}.
+
+    프리픽스/suffix 감지: '₩', 'KRW', '원' → KRW / '$', 'USD' → USD.
+    감지 실패 시 currency=None (호출자가 헤더 기반으로 해석).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return None, None
+    s_upper = s.upper()
+    cur: Optional[str] = None
+    if s.startswith("₩") or s_upper.startswith("KRW") or s.endswith("원"):
+        cur = "KRW"
+    elif s.startswith("$") or s_upper.startswith("USD"):
+        cur = "USD"
+    cleaned = s.replace(",", "")
+    m = re.search(r"\d+(?:\.\d+)?", cleaned)
+    if not m:
+        return None, cur
+    try:
+        return float(m.group()), cur
+    except ValueError:
+        return None, cur
 
 
 def parse_row(row: dict) -> Optional[dict]:
@@ -133,9 +161,22 @@ def parse_row(row: dict) -> Optional[dict]:
     if not ASIN_RE.match(asin):
         return None
 
-    price_str = _pick(row, HEADER_ALIASES["price_usd"]).replace(",", "")
-    price_match = re.search(r"[\d.]+", price_str)
-    price = float(price_match.group()) if price_match else None
+    price_usd: Optional[float] = None
+    price_krw: Optional[float] = None
+
+    krw_raw = _pick(row, HEADER_ALIASES["price_krw"])
+    if krw_raw:
+        price_krw, _ = _parse_price(krw_raw)
+
+    usd_raw = _pick(row, HEADER_ALIASES["price_usd"])
+    if usd_raw:
+        val, cur = _parse_price(usd_raw)
+        if cur == "KRW":
+            # 헤더가 '가격' 등 범용인데 값에 KRW/₩ 마커가 있으면 KRW 로 분류
+            if price_krw is None:
+                price_krw = val
+        else:
+            price_usd = val
 
     review_str = _pick(row, HEADER_ALIASES["review_count"]).replace(",", "")
     reviews = int(review_str) if review_str.isdigit() else 0
@@ -152,7 +193,8 @@ def parse_row(row: dict) -> Optional[dict]:
         "asin": asin,
         "title": _pick(row, HEADER_ALIASES["title"]),
         "amazon_url": amazon_url,
-        "price_usd": price,
+        "price_usd": price_usd,
+        "price_krw": price_krw,
         "rating": rating,
         "review_count": reviews,
         "monthly_sales": _pick(row, HEADER_ALIASES["monthly_sales"]) or None,
@@ -170,11 +212,12 @@ def import_rows(rows: list[dict]) -> tuple[int, int]:
         for r in rows:
             cur = conn.execute(
                 """INSERT OR IGNORE INTO sourcing_candidates
-                   (asin, title, amazon_url, price_usd, rating, review_count,
+                   (asin, title, amazon_url, price_usd, price_krw, rating, review_count,
                     monthly_sales, category, notes, image_url, sourcing_status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered')""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered')""",
                 (
-                    r["asin"], r["title"], r["amazon_url"], r["price_usd"],
+                    r["asin"], r["title"], r["amazon_url"],
+                    r["price_usd"], r.get("price_krw"),
                     r["rating"], r["review_count"], r["monthly_sales"],
                     r["category"], r["notes"], r.get("image_url"),
                 ),
