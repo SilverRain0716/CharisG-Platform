@@ -100,7 +100,10 @@ async def _run_upload_background(job_id: str, product_ids: list[int], channel: s
     등록 전 완성: 상품명+이미지+속성+태그+브랜드를 모두 포함한 페이로드로 1회 등록.
     """
     import os
-    concurrency = int(os.environ.get("SMARTSTORE_UPLOAD_CONCURRENCY", "4"))
+    # 기본 1 — 네이버 이미지 업로드 API 분/시간 누적 쿼터 회피.
+    # 동시 호출이 많으면 분당 쿼터 소진이 빨라 429 반복 → 사실상 정지.
+    # 급할 때만 env 로 2~4 올려 쓰되 429 위험.
+    concurrency = int(os.environ.get("SMARTSTORE_UPLOAD_CONCURRENCY", "1"))
     sem = asyncio.Semaphore(max(1, concurrency))
     counter_lock = asyncio.Lock()
 

@@ -1,4 +1,5 @@
-"""PA Products — 활성 상품 목록 + 상세 + 상태 변경."""
+"""PA Products — 활성 상품 목록 + 상세 + 상태 변경 + 채널 준비 job."""
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,8 +8,16 @@ from pydantic import BaseModel
 from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
 from backend.purchase.services.channel_listing_service import send_to_channels
+from backend.purchase.services import channel_prepare
 
 router = APIRouter(prefix="/api/pa/products", tags=["pa-products"])
+
+
+def _pct(job: dict) -> float:
+    total = job.get("total") or 0
+    if not total:
+        return 0.0
+    return round(((job.get("processed") or 0) + (job.get("errors") or 0)) / total * 100, 1)
 
 
 @router.get("")
@@ -19,12 +28,19 @@ def list_products(
     offset: int = 0,
     unchanneled_only: bool = False,
 ):
-    """상품 목록. unchanneled_only=True 면 listings_pa 행이 하나도 없는 상품만 (= 아직 채널로 보낸 적 없음)."""
+    """상품 목록. unchanneled_only=True 면 listings_pa 행이 하나도 없는 상품만 (= 아직 채널로 보낸 적 없음).
+
+    status='archived' 상품은 기본적으로 숨김 (업로드 실패 정리분).
+    명시적으로 status='archived' 를 파라미터로 주면 조회 가능.
+    """
     where = ["p.business_model='purchase'"]
     params: list = []
     if status:
         where.append("p.status=?")
         params.append(status)
+    else:
+        # 기본: archived 제외 (업로드 실패 정리분 숨김)
+        where.append("(p.status IS NULL OR p.status != 'archived')")
     if unchanneled_only:
         where.append("NOT EXISTS (SELECT 1 FROM listings_pa l WHERE l.product_id = p.id)")
     where_sql = " AND ".join(where)
@@ -39,7 +55,22 @@ def list_products(
         total = conn.execute(
             f"SELECT COUNT(*) c FROM products p WHERE {where_sql}", tuple(params),
         ).fetchone()["c"]
-    return {"items": [dict(r) for r in rows], "total": total}
+        unprocessed_count = conn.execute(
+            f"SELECT COUNT(*) c FROM products p WHERE {where_sql} AND p.ai_processed_at IS NULL",
+            tuple(params),
+        ).fetchone()["c"]
+        processed_count = conn.execute(
+            f"SELECT COUNT(*) c FROM products p WHERE {where_sql} AND p.ai_processed_at IS NOT NULL",
+            tuple(params),
+        ).fetchone()["c"]
+    return {
+        "items": [dict(r) for r in rows],
+        "total": total,
+        "unprocessed_count": unprocessed_count,
+        "processed_count": processed_count,
+        "naver_category_pending": channel_prepare.count_naver_pending(),
+        "coupang_category_pending": channel_prepare.count_coupang_pending(),
+    }
 
 
 @router.get("/{pid}")
@@ -81,7 +112,9 @@ def bulk_send_to_channel(body: SendToChannelBody, user: dict = Depends(current_u
     with get_db() as conn:
         rows = conn.execute(
             """SELECT id FROM products
-               WHERE business_model='purchase' AND ai_processed_at IS NOT NULL AND cost_usd IS NOT NULL
+               WHERE business_model='purchase' AND ai_processed_at IS NOT NULL
+                 AND cost_usd IS NOT NULL
+                 AND (status IS NULL OR status != 'archived')
                ORDER BY id"""
         ).fetchall()
     if not rows:
@@ -198,3 +231,65 @@ def bulk_delete(body: BulkDeleteBody, user: dict = Depends(current_user)):
         counts = _cascade_delete_products(conn, ids)
 
     return {"deleted": counts, "ids": ids}
+
+
+# ── 채널 준비 (카테고리 매핑 백그라운드 job) ─────────────────
+
+@router.post("/prepare-naver-category")
+async def prepare_naver_category_start(user: dict = Depends(current_user)):
+    """products.category_path 의 텍스트 값을 네이버 leaf ID 로 매핑."""
+    running = channel_prepare.get_running_job(channel_prepare.JOB_TYPE_NAVER)
+    if running:
+        raise HTTPException(409, f"이미 실행 중: {running['id']}")
+    total = channel_prepare.count_naver_pending()
+    if not total:
+        raise HTTPException(400, "매핑 대상 없음")
+    job_id = channel_prepare.create_job(channel_prepare.JOB_TYPE_NAVER, total)
+    asyncio.create_task(channel_prepare.run_naver_category_background(job_id))
+    return {"job_id": job_id, "total": total}
+
+
+@router.get("/prepare-naver-category")
+def prepare_naver_category_current(user: dict = Depends(current_user)):
+    job = channel_prepare.get_running_job(channel_prepare.JOB_TYPE_NAVER)
+    if not job:
+        return {"job": None}
+    return {"job": {**job, "pct": _pct(job)}}
+
+
+@router.get("/prepare-naver-category/{job_id}")
+def prepare_naver_category_status(job_id: str, user: dict = Depends(current_user)):
+    job = channel_prepare.get_job(job_id, channel_prepare.JOB_TYPE_NAVER)
+    if not job:
+        raise HTTPException(404, "job 없음")
+    return {**job, "pct": _pct(job)}
+
+
+@router.post("/prepare-coupang-category")
+async def prepare_coupang_category_start(user: dict = Depends(current_user)):
+    """listings_pa 의 네이버 ID 를 쿠팡 카테고리 코드로 매핑."""
+    running = channel_prepare.get_running_job(channel_prepare.JOB_TYPE_COUPANG)
+    if running:
+        raise HTTPException(409, f"이미 실행 중: {running['id']}")
+    total = channel_prepare.count_coupang_pending()
+    if not total:
+        raise HTTPException(400, "매핑 대상 없음")
+    job_id = channel_prepare.create_job(channel_prepare.JOB_TYPE_COUPANG, total)
+    asyncio.create_task(channel_prepare.run_coupang_category_background(job_id))
+    return {"job_id": job_id, "total": total}
+
+
+@router.get("/prepare-coupang-category")
+def prepare_coupang_category_current(user: dict = Depends(current_user)):
+    job = channel_prepare.get_running_job(channel_prepare.JOB_TYPE_COUPANG)
+    if not job:
+        return {"job": None}
+    return {"job": {**job, "pct": _pct(job)}}
+
+
+@router.get("/prepare-coupang-category/{job_id}")
+def prepare_coupang_category_status(job_id: str, user: dict = Depends(current_user)):
+    job = channel_prepare.get_job(job_id, channel_prepare.JOB_TYPE_COUPANG)
+    if not job:
+        raise HTTPException(404, "job 없음")
+    return {**job, "pct": _pct(job)}

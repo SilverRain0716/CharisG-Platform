@@ -1,4 +1,5 @@
 """PA Sourcing — 시트 import, 후보 리스트, 선택 삭제, 상품관리 이관."""
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,7 +8,12 @@ from pydantic import BaseModel
 from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
 from backend.purchase.services.sheet_importer import import_from_sheet_url
-from backend.purchase.services.sourcing_promote import promote_all
+from backend.purchase.services.sourcing_promote import (
+    create_promote_job,
+    get_promote_job,
+    get_running_promote_job,
+    run_promote_background,
+)
 
 router = APIRouter(prefix="/api/pa/sourcing", tags=["pa-sourcing"])
 
@@ -78,7 +84,46 @@ def bulk_delete(body: BulkDeleteBody, user: dict = Depends(current_user)):
     return {"deleted": deleted}
 
 
+# ── 상품관리로 전체 이관 (백그라운드 job) ──
+
+def _pct(job: dict) -> float:
+    total = job.get("total") or 0
+    if not total:
+        return 0.0
+    return round(((job.get("processed") or 0) + (job.get("errors") or 0)) / total * 100, 1)
+
+
 @router.post("/promote-all")
-def promote_all_route(user: dict = Depends(current_user)):
-    result = promote_all()
-    return result
+async def promote_all_start(user: dict = Depends(current_user)):
+    """이관 job 시작. job_id 즉시 반환, 실제 처리는 백그라운드에서 진행."""
+    running = get_running_promote_job()
+    if running:
+        raise HTTPException(409, f"이미 실행 중인 이관 job 있음: {running['id']}")
+
+    with get_db() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) c FROM sourcing_candidates"
+        ).fetchone()["c"]
+    if not total:
+        raise HTTPException(400, "이관할 후보 없음")
+
+    job_id = create_promote_job(total)
+    asyncio.create_task(run_promote_background(job_id))
+    return {"job_id": job_id, "total": total}
+
+
+@router.get("/promote-all")
+def promote_all_current(user: dict = Depends(current_user)):
+    """현재 실행 중인 이관 job 조회. 없으면 null."""
+    job = get_running_promote_job()
+    if not job:
+        return {"job": None}
+    return {"job": {**job, "pct": _pct(job)}}
+
+
+@router.get("/promote-all/{job_id}")
+def promote_all_status(job_id: str, user: dict = Depends(current_user)):
+    job = get_promote_job(job_id)
+    if not job:
+        raise HTTPException(404, "이관 job 없음")
+    return {**job, "pct": _pct(job)}

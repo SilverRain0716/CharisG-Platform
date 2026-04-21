@@ -78,6 +78,49 @@ PROHIBITED_CATEGORY_KEYWORDS = (
 )
 
 
+# 쿠팡 유통경로 소명 요청(정품 게이팅)에 걸린 브랜드 기본 차단 목록.
+# Why: 거래 내역 없는 구매대행은 소명 불가 → 선제 차단으로 계정 리스크 예방.
+# 운영자가 settings 테이블의 'coupang.brand_blocklist' 키로 JSON 배열 저장하면 그 값이 우선.
+BRAND_BLOCKLIST_DEFAULT = (
+    "NIKE", "ADIDAS", "PUMA", "STANLEY", "LACOSTE", "TITLEIST", "CARHARTT",
+    "나이키", "아디다스", "푸마", "스탠리", "라코스테", "타이틀리스트", "칼하트",
+)
+
+
+def _load_brand_blocklist() -> tuple[str, ...]:
+    """settings 테이블에서 블랙리스트 로드 (없으면 default)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key='coupang.brand_blocklist'"
+        ).fetchone()
+    if row and row["value"]:
+        try:
+            items = json.loads(row["value"])
+            if isinstance(items, list):
+                return tuple(str(x).strip() for x in items if str(x).strip())
+        except Exception:
+            logger.warning("[coupang] settings.coupang.brand_blocklist JSON 파싱 실패 — default 사용")
+    return BRAND_BLOCKLIST_DEFAULT
+
+
+def _is_brand_blocked(title_en: str, title_ko: str, blocklist: tuple[str, ...]) -> Optional[str]:
+    """title에 블랙리스트 브랜드 키워드가 있으면 매칭된 키워드 반환."""
+    en = (title_en or "").upper()
+    ko = title_ko or ""
+    for kw in blocklist:
+        if not kw:
+            continue
+        k_upper = kw.upper()
+        # 영문은 단어 경계 검사, 한글은 부분 문자열
+        if re.search(r"[A-Za-z]", kw):
+            if re.search(rf"\b{re.escape(k_upper)}\b", en):
+                return kw
+        else:
+            if kw in ko:
+                return kw
+    return None
+
+
 def _is_prohibited_category(category_name: str) -> tuple[bool, str]:
     """카테고리명에 금지 키워드가 포함되면 True."""
     if not category_name:
@@ -245,7 +288,7 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
         "returnCharge": P.COUPANG_RETURN_FEE,
         "outboundShippingPlaceCode": COUPANG_OUTBOUND_SHIPPING_PLACE_CODE,
         "vendorUserId": COUPANG_USER_ID or COUPANG_VENDOR_ID,  # WING 로그인 계정 ID
-        "requested": False,
+        "requested": True,  # 즉시 승인 요청 — 쿠팡 심사 대기열로 전송
         "items": [{
             "itemName": name[:50],
             "originalPrice": price,
@@ -311,6 +354,25 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
     if existing and existing["channel_product_id"]:
         return {"ok": False, "skip": True,
                 "error": f"이미 등록됨 (channel_product_id={existing['channel_product_id']})"}
+
+    # 브랜드 블랙리스트 사전 차단 (쿠팡 유통경로 소명 대응 — 정품 민감 브랜드 차단)
+    with get_db() as conn:
+        prow = conn.execute(
+            "SELECT title_en, title_ko FROM products WHERE id=?",
+            (product_id,),
+        ).fetchone()
+    if prow:
+        matched = _is_brand_blocked(prow["title_en"] or "", prow["title_ko"] or "", _load_brand_blocklist())
+        if matched:
+            reason = f"브랜드 블랙리스트 차단 ({matched})"
+            with get_db() as conn:
+                conn.execute(
+                    """UPDATE listings_pa SET status='excluded',
+                       error_message=?, last_synced_at=CURRENT_TIMESTAMP
+                       WHERE product_id=? AND channel='coupang'""",
+                    (reason, product_id),
+                )
+            return {"ok": False, "skip": True, "error": reason}
 
     # 사전 카테고리 차단 (coupang_categories.path 기준 키워드 검사)
     if existing and existing["coupang_category_code"]:

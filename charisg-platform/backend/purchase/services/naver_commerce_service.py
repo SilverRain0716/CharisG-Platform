@@ -17,6 +17,7 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from backend_shared._config import NAVER_COMMERCE_CLIENT_ID, NAVER_COMMERCE_CLIENT_SECRET
+from backend_shared.utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +34,18 @@ _TOKEN_LOCK = threading.Lock()
 _TOKEN_CACHE: dict = {"access_token": None, "expires_at": 0.0}
 _TOKEN_SAFETY_MARGIN_SEC = 120
 
-# ── 글로벌 Rate Limiter (네이버 공식 2/s, 직렬 큐) ────────────
-# 네이버 커머스 API 공식 제한: 초당 2회 (내스토어 앱 기준)
-# 모든 API 호출을 단일 Lock으로 직렬화하여 0.55초 간격(≈1.8/s) 보장
+# ── 글로벌 Rate Limiter (초당 + 분당 이중 제한) ────────────
+# 네이버 커머스 API:
+#   - 공식 초당 제한: 2/s (내스토어 앱 기준) → _MIN_INTERVAL 0.55s로 ≈1.8/s
+#   - 비공식 분/시간 단위 누적 쿼터 존재 (특히 /product-images/upload)
+#     → 초당만 막으면 4분간 호출이 많아 분단위 쿼터 고갈 후 429 폭탄
+# 이중 게이트: 초당(threading.Lock + sleep) + 분당(RateLimiter 슬라이딩 윈도우).
+# NAVER_COMMERCE_RPM 환경변수로 분당 한도 조절 (기본 80, 2/s×60×0.66 보수)
 _GATE_LOCK = threading.Lock()
 _LAST_REQUEST_TIME = 0.0
 _MIN_INTERVAL = 0.55  # 초당 ~1.8회 (2/s 미만으로 안전 마진)
+_RPM_LIMIT = int(os.environ.get("NAVER_COMMERCE_RPM", "80"))
+_rpm_limiter = RateLimiter(max_per_minute=_RPM_LIMIT, name="naver_commerce")
 
 # ── 재시도 정책 ────────────────────────────────────────────────
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
@@ -47,8 +54,14 @@ _BASE_BACKOFF_SEC = 2.0
 
 
 def _gate():
-    """모든 네이버 API 호출 전 반드시 통과. 최소 간격 보장 (직렬)."""
+    """모든 네이버 API 호출 전 반드시 통과.
+    1) 분당 RPM 슬라이딩 윈도우 (누적 쿼터 대비)
+    2) 초당 최소 간격 직렬 Lock (공식 2/s 대비)
+    """
     global _LAST_REQUEST_TIME
+    # 1) 분당 한도
+    _rpm_limiter.wait()
+    # 2) 초당 간격 (lock 안에서 직렬화)
     with _GATE_LOCK:
         now = time.time()
         elapsed = now - _LAST_REQUEST_TIME
@@ -78,7 +91,7 @@ def _request_with_retry(method: str, url: str, **kwargs) -> Optional[requests.Re
                 wait = float(retry_after) if retry_after else _BASE_BACKOFF_SEC * (2 ** attempt)
             except ValueError:
                 wait = _BASE_BACKOFF_SEC * (2 ** attempt)
-            wait = min(wait, 30.0)
+            wait = min(wait, 300.0)  # Retry-After 최대 5분까지 존중 (네이버 분/시간 쿼터 회복용)
             logger.warning(
                 f"네이버 {r.status_code} 재시도 — {wait:.1f}s 대기 ({attempt + 1}/{_MAX_RETRIES}) {url[-60:]}"
             )

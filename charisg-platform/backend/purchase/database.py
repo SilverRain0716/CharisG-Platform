@@ -44,4 +44,5 @@ def init_db() -> None:
         (9, migrations_dir / "schema_pa_v9.sql", "inferred_attributes_json + batch_jobs phase_message"),
         (10, migrations_dir / "schema_pa_v10.sql", "coupang_categories tree + listings_pa coupang_category_code"),
         (11, migrations_dir / "schema_pa_v11.sql", "naver_coupang_category_map (3-stage auto-map)"),
+        (12, migrations_dir / "schema_pa_v12.sql", "listings_pa approval_requested_at (coupang saveV2→approval flow)"),
     ])

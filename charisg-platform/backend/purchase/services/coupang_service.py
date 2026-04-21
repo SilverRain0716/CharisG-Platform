@@ -165,6 +165,131 @@ def register_product(payload: dict) -> Optional[dict]:
         return None
 
 
+def get_seller_product(seller_product_id: str) -> Optional[dict]:
+    """셀러상품 단건 조회 (GET /v2/.../seller-products/{id}). vendorItemId 추출용."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    if not seller_product_id:
+        return None
+    path = f"/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}"
+    try:
+        r = _request_with_retry("GET", BASE + path, headers=_signature("GET", path), timeout=15)
+        if r is None or r.status_code >= 400:
+            return None
+        return r.json() if r.text else None
+    except Exception as e:
+        logger.error(f"쿠팡 상품 조회 실패: {e}")
+        return None
+
+
+def request_approval(seller_product_id: str) -> tuple[bool, str]:
+    """임시저장된 셀러상품에 대해 승인 요청 전송
+    (PUT /v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{id}/requests/approval).
+
+    register_product 를 requested=False 로 호출한 뒤 이 API 를 호출해야 쿠팡 심사가 시작된다.
+    """
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "COUPANG_* 미설정"
+    if not seller_product_id:
+        return False, "seller_product_id 없음"
+    path = f"/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}/requests/approval"
+    try:
+        r = _request_with_retry("PUT", BASE + path, headers=_signature("PUT", path), timeout=30)
+        if r is None:
+            return False, "no response"
+        body = r.json() if r.text else {}
+        if r.status_code < 400 and isinstance(body, dict) and body.get("code") != "ERROR":
+            return True, ""
+        msgs = _extract_error_messages(body)
+        return False, f"status={r.status_code} " + ("; ".join(msgs) if msgs else r.text[:200])
+    except Exception as e:
+        return False, f"예외: {e}"
+
+
+def stop_sales_vendor_item(vendor_item_id: str) -> tuple[bool, str]:
+    """vendorItem 단위 판매 중지 (PUT /v2/.../vendor-items/{id}/sales/stop)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "COUPANG_* 미설정"
+    if not vendor_item_id:
+        return False, "vendor_item_id 없음"
+    path = f"/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/{vendor_item_id}/sales/stop"
+    try:
+        r = _request_with_retry("PUT", BASE + path, headers=_signature("PUT", path), timeout=30)
+        if r is None:
+            return False, "no response"
+        body = r.json() if r.text else {}
+        if r.status_code < 400 and isinstance(body, dict) and body.get("code") != "ERROR":
+            return True, ""
+        msgs = _extract_error_messages(body)
+        return False, f"status={r.status_code} " + ("; ".join(msgs) if msgs else r.text[:200])
+    except Exception as e:
+        return False, f"예외: {e}"
+
+
+def stop_sales(seller_product_id: str) -> tuple[bool, str]:
+    """sellerProductId 기반 판매 중지 — 셀러상품 조회 → 각 vendorItem 일괄 중지.
+
+    쿠팡은 sellerProduct 자체엔 sales/stop 없음. items[].vendorItemId 단위로만 가능.
+    """
+    info = get_seller_product(seller_product_id)
+    if not info or not isinstance(info, dict):
+        return False, "상품 조회 실패"
+    data = info.get("data")
+    if not isinstance(data, dict):
+        return False, f"data 없음 (code={info.get('code')})"
+    items = data.get("items") or []
+    if not items:
+        return False, "items 비어있음 (vendorItemId 없음)"
+
+    ok_count = 0
+    fails: list[str] = []
+    for it in items:
+        vid = str(it.get("vendorItemId") or "").strip()
+        if not vid:
+            continue
+        success, err = stop_sales_vendor_item(vid)
+        if success:
+            ok_count += 1
+        else:
+            fails.append(f"vid={vid}: {err}")
+
+    if ok_count and not fails:
+        return True, ""
+    if ok_count and fails:
+        return True, f"부분 성공 ({ok_count}); " + "; ".join(fails[:2])
+    return False, "; ".join(fails[:2]) or "모든 item 실패"
+
+
+def delete_product(seller_product_id: str) -> tuple[bool, str]:
+    """셀러상품 삭제 (DELETE /v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{id}).
+
+    반환: (성공여부, 에러메시지)
+    - 2xx + code='SUCCESS' → (True, "")
+    - 기타 → (False, 에러 요약)
+    """
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "COUPANG_* 미설정"
+    if not seller_product_id:
+        return False, "seller_product_id 없음"
+    path = f"/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}"
+    try:
+        r = _request_with_retry(
+            "DELETE",
+            BASE + path,
+            headers=_signature("DELETE", path),
+            timeout=30,
+        )
+        if r is None:
+            return False, "no response"
+        body = r.json() if r.text else {}
+        if r.status_code < 400 and isinstance(body, dict) and body.get("code") != "ERROR":
+            return True, ""
+        msgs = _extract_error_messages(body)
+        return False, f"status={r.status_code} " + ("; ".join(msgs) if msgs else r.text[:200])
+    except Exception as e:
+        return False, f"예외: {e}"
+
+
 def get_orders(start: str, end: str) -> Optional[list]:
     path = f"/v2/providers/openapi/apis/api/v4/vendors/{COUPANG_VENDOR_ID}/ordersheets"
     query = f"createdAtFrom={start}&createdAtTo={end}&status=ACCEPT"

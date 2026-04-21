@@ -13,6 +13,7 @@ from backend.purchase.services.image_downloader import mark_images_for_deletion
 from backend.purchase.services.coupang_service import get_orders
 from backend.purchase.services.coupang_lister import list_product
 from backend.purchase.services.coupang_meta import get_category_meta
+from backend.purchase.services import coupang_approval
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pa/coupang", tags=["pa-coupang"])
@@ -39,7 +40,10 @@ def list_listings(user: dict = Depends(current_user)):
                WHERE l.channel = 'coupang'
                ORDER BY l.id DESC""",
         ).fetchall()
-    return {"items": [dict(r) for r in rows]}
+    return {
+        "items": [dict(r) for r in rows],
+        "approval_pending": coupang_approval.count_pending_approval(),
+    }
 
 
 @router.post("/upload/{product_id}")
@@ -215,3 +219,38 @@ async def _run_coupang_upload_bg(job_id: str, product_ids: list[int]):
 @router.get("/orders")
 def fetch_orders(start: str, end: str, user: dict = Depends(current_user)):
     return {"orders": get_orders(start, end) or []}
+
+
+# ── 임시저장 → 승인 요청 (백그라운드 job) ──────────────────
+
+@router.post("/request-approval-all")
+async def request_approval_all(user: dict = Depends(current_user)):
+    """listed 이지만 approval_requested_at NULL 인 쿠팡 리스팅에 대해
+    PUT /seller-products/{id}/requests/approval 을 순회 호출."""
+    running = coupang_approval.get_running_job()
+    if running:
+        raise HTTPException(409, f"이미 실행 중: {running['id']}")
+    total = coupang_approval.count_pending_approval()
+    if not total:
+        raise HTTPException(400, "승인 요청 대상 없음")
+    job_id = coupang_approval.create_job(total)
+    asyncio.create_task(coupang_approval.run_approval_background(job_id))
+    return {"job_id": job_id, "total": total}
+
+
+@router.get("/request-approval-all")
+def request_approval_current(user: dict = Depends(current_user)):
+    job = coupang_approval.get_running_job()
+    if not job:
+        return {"job": None}
+    pct = round(((job["processed"] + job["errors"]) / job["total"]) * 100, 1) if job["total"] else 0
+    return {"job": {**job, "pct": pct}}
+
+
+@router.get("/request-approval-all/{job_id}")
+def request_approval_status(job_id: str, user: dict = Depends(current_user)):
+    job = coupang_approval.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job 없음")
+    pct = round(((job["processed"] + job["errors"]) / job["total"]) * 100, 1) if job["total"] else 0
+    return {**job, "pct": pct}
