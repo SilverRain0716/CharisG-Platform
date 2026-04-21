@@ -25,7 +25,7 @@ import logging
 import os
 import re
 import time
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import quote_plus
 
 import requests
@@ -40,11 +40,19 @@ ZENROWS_API_KEY = os.getenv("ZENROWS_API_KEY", "")
 ZENROWS_ENDPOINT = "https://api.zenrows.com/v1/"
 
 
-def _zenrows_get(amazon_url: str, timeout: int = 60) -> requests.Response:
+def _zenrows_get(
+    amazon_url: str,
+    *,
+    proxy_country: Optional[str] = None,
+    timeout: int = 60,
+) -> requests.Response:
     """Amazon URL을 ZenRows API 경유로 페치.
 
     요청당 ~5 크레딧(premium_proxy=true, js_render 미사용).
     ZenRows가 프록시 로테이션/재시도/WAF 우회를 자동 수행.
+
+    proxy_country: 'kr' 지정 시 한국에서 접속하는 것으로 간주되어 Amazon.com이
+      KRW 가격과 "Republic of Korea" 배송 정보를 노출. 미지정 시 기본 US.
     """
     if not ZENROWS_API_KEY:
         raise RuntimeError("ZENROWS_API_KEY not configured in environment")
@@ -54,6 +62,8 @@ def _zenrows_get(amazon_url: str, timeout: int = 60) -> requests.Response:
         "url": amazon_url,
         "premium_proxy": "true",
     }
+    if proxy_country:
+        params["proxy_country"] = proxy_country
     return requests.get(ZENROWS_ENDPOINT, params=params, timeout=timeout)
 
 
@@ -133,34 +143,40 @@ def _aggregate(items: list[dict]) -> dict:
 def crawl_keywords(
     keywords: list[str],
     delayer: Optional[CrawlerDelayer] = None,
+    region: Literal["US", "KR"] = "US",
 ) -> dict:
     """키워드 리스트를 순차 크롤링 → DB 저장.
 
     네트워크: ZenRows API 경유. 프록시 불필요.
-    Returns: {"crawled": N, "aborted": bool, "captcha_count": N, "total_keywords": N}
+
+    region:
+      'US' (기본) — 표준 Amazon.com (USD, 일반 US 배송)
+      'KR'       — ZenRows proxy_country='kr' → KRW 가격 + Republic of Korea 배송 정보
+
+    Returns: {"crawled": N, "aborted": bool, "captcha_count": N, "total_keywords": N, "region": str}
     """
     if delayer is None:
-        # ZenRows 가 rate-limit 관리 → 클라이언트 측 딜레이 축소 (15-25s → 5-10s)
         delayer = CrawlerDelayer(
             delay_min=5.0,
             delay_max=10.0,
-            name="amazon_keyword_crawler_zr",
+            name=f"amazon_keyword_crawler_zr_{region.lower()}",
         )
 
+    proxy_country = "kr" if region == "KR" else None
     captcha_count = 0
     crawled = 0
 
     for kw in keywords:
         if not delayer.before_request():
-            logger.error("⛔ [ZenRows] 크롤러 중단 — 연속 실패 임계값 초과")
+            logger.error(f"⛔ [ZenRows][{region}] 크롤러 중단 — 연속 실패 임계값 초과")
             break
 
         url = f"https://www.amazon.com/s?k={quote_plus(kw)}&ref=nb_sb_noss"
         try:
-            r = _zenrows_get(url, timeout=60)
+            r = _zenrows_get(url, proxy_country=proxy_country, timeout=60)
 
             if r.status_code != 200:
-                logger.warning(f"[ZenRows][{kw}] HTTP {r.status_code}")
+                logger.warning(f"[ZenRows][{region}][{kw}] HTTP {r.status_code}")
                 delayer.report_failure()
                 continue
 
@@ -168,13 +184,13 @@ def crawl_keywords(
 
             if _detect_blocked(r.text):
                 captcha_count += 1
-                logger.warning(f"[ZenRows][{kw}] 차단/CAPTCHA 마커 감지 (size={size_kb}KB)")
+                logger.warning(f"[ZenRows][{region}][{kw}] 차단/CAPTCHA 마커 감지 (size={size_kb}KB)")
                 delayer.report_failure(captcha=True)
                 continue
 
             items = _parse_search_page(r.text)
             if not items:
-                logger.warning(f"[ZenRows][{kw}] 파싱 결과 0건 (size={size_kb}KB)")
+                logger.warning(f"[ZenRows][{region}][{kw}] 파싱 결과 0건 (size={size_kb}KB)")
                 delayer.report_failure()
                 continue
 
@@ -183,12 +199,12 @@ def crawl_keywords(
             delayer.report_success()
             crawled += 1
             logger.info(
-                f"[ZenRows][{kw}] 수집 {len(items)}개, "
+                f"[ZenRows][{region}][{kw}] 수집 {len(items)}개, "
                 f"p75=${agg['price_p75']}, size={size_kb}KB"
             )
 
         except Exception as e:
-            logger.error(f"[ZenRows][{kw}] 크롤 실패: {e}")
+            logger.error(f"[ZenRows][{region}][{kw}] 크롤 실패: {e}")
             delayer.report_failure()
 
     return {
@@ -196,6 +212,7 @@ def crawl_keywords(
         "aborted": delayer.aborted,
         "captcha_count": captcha_count,
         "total_keywords": len(keywords),
+        "region": region,
     }
 
 
