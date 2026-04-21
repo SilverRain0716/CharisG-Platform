@@ -11,13 +11,18 @@ amazon_keyword_crawler.py — DS 전용 Amazon 키워드 크롤러 (Phase 1+ Gap
   현재: ZenRows API (https://api.zenrows.com/v1/) 경유 + premium_proxy=true
   변경 사유: Webshare pool 이 Amazon WAF 에 차단됨 (datacenter/residential 무관 503/202).
 
+파싱 리팩터 (2026-04-22, Stage 3-A):
+  _parse_search_page 를 검증된 KR/US 듀얼 통화 정규식으로 교체.
+  _aggregate 를 region-aware 로 변경 (KR → KRW만, US → USD만).
+  _save_results INSERT 에 rating 컬럼 추가. currency/kr_shipping/price_display 는
+  현재 스키마에 컬럼 부재로 DB 미저장 — 메모리·로그·집계에만 반영.
+
 크레딧 / 비용:
-  premium_proxy=true, js_render 미사용 기준 요청당 약 5 크레딧.
-  검색 결과 HTML 은 JS 렌더 불필요 (SSR 포함됨).
+  premium_proxy=true (+ proxy_country=kr), js_render 미사용 기준 요청당 약 5 크레딧.
 
 CAPTCHA / 차단:
   ZenRows 가 자동 재시도 + 프록시 로테이션 수행. 클라이언트 측 딜레이는 최소화
-  (내부 fallback delayer: 5-10s 간격). CAPTCHA/"Sorry" 마커 감지 시 delayer 실패 기록.
+  (내부 fallback delayer: 5-10s 간격).
 
 EC2 의존: ZENROWS_API_KEY 환경변수만 필요. 프록시 없음.
 """
@@ -25,6 +30,7 @@ import logging
 import os
 import re
 import time
+from html import unescape
 from typing import Literal, Optional
 from urllib.parse import quote_plus
 
@@ -68,10 +74,7 @@ def _zenrows_get(
 
 
 def _detect_blocked(html: str) -> bool:
-    """Amazon 차단/에러 페이지 감지.
-
-    ZenRows 를 거쳐도 Amazon 이 차단 페이지를 반환하면 본문에 이 마커들이 포함됨.
-    """
+    """Amazon 차단/에러 페이지 감지."""
     lower = html.lower()
     return (
         "captcha" in lower
@@ -83,62 +86,182 @@ def _detect_blocked(html: str) -> bool:
     )
 
 
-def _parse_search_page(html: str) -> list[dict]:
-    """검색 결과 페이지 HTML → 개별 리스팅 dict 리스트.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Parser — KR/US HTML 양쪽 검증된 정규식 (Stage 3-A)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    DOM 의존 (data-component-type="s-search-result").
-    실패 시 빈 리스트.
+def _extract_cards(html: str) -> list[tuple[str, str]]:
+    """검색 결과 HTML → (ASIN, 카드 HTML slice) 튜플 리스트.
+
+    s-result-item + data-asin div 의 시작 위치를 모아 다음 카드 시작 직전까지 slice.
+    중복 ASIN 은 첫 등장만 보존.
     """
-    items = []
-    blocks = re.findall(
-        r'data-asin="([A-Z0-9]{10})"[^>]*>(.*?)</div></div></div>',
-        html,
-        re.DOTALL,
+    positions: list[tuple[str, int]] = []
+    for m in re.finditer(r"<div\b([^>]*)>", html):
+        attrs = m.group(1)
+        if "s-result-item" not in attrs:
+            continue
+        am = re.search(r'data-asin="([A-Z0-9]{10})"', attrs)
+        if not am:
+            continue
+        positions.append((am.group(1), m.start()))
+
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for i, (asin, pos) in enumerate(positions):
+        if asin in seen:
+            continue
+        seen.add(asin)
+        end = positions[i + 1][1] if i + 1 < len(positions) else min(pos + 15000, len(html))
+        out.append((asin, html[pos:end]))
+    return out
+
+
+def _detect_kr_shipping(card: str) -> str:
+    """KR 배송 가능 여부. 'OK' / 'NO' / 'UNKNOWN'.
+
+    v3.4 프롬프트 §2-3 검증 규칙:
+      - 'cannot be shipped to' 또는 'does not ship to' → NO
+      - 'FREE delivery|Delivery ... to (the )?Republic of Korea' (중간 날짜 span 허용) → OK
+      - 'Ships to Korea' → OK
+      - 기타 → UNKNOWN
+    """
+    if re.search(r"cannot be shipped to", card, re.I):
+        return "NO"
+    if "does not ship to" in card.lower():
+        return "NO"
+    if re.search(
+        r"(FREE delivery|Delivery)[\s\S]{0,200}?to (the )?Republic of Korea",
+        card,
+        re.I,
+    ):
+        return "OK"
+    if "Ships to Korea" in card:
+        return "OK"
+    return "UNKNOWN"
+
+
+def _parse_card(asin: str, card: str) -> dict:
+    """단일 카드 → 필드 dict. KR/US 양쪽 검증 완료."""
+    info: dict = {
+        "asin": asin,
+        "title": "",
+        "price_num": None,
+        "price_display": None,
+        "currency": None,
+        "rating": None,
+        "reviews": 0,
+        "bought_monthly": None,
+        "kr_shipping": "UNKNOWN",
+        "is_fbm": False,  # 새 파서에서 미추출 (스키마 호환용 placeholder)
+    }
+
+    # Title — h2 내부 span 중 가장 긴 것 (카드에 여러 span 섞여도 본 타이틀 선정)
+    h2 = re.findall(r"<h2[^>]*>.*?<span[^>]*>([^<]+)</span>", card, re.DOTALL)
+    if h2:
+        info["title"] = unescape(max(h2, key=len)).strip()
+
+    # Price — USD / KRW 텍스트 / ₩ 심볼 세 가지 모두 대응
+    p = re.search(
+        r'<span class="a-offscreen">'
+        r'(?:\$([\d,]+\.\d{2})|KRW\s+([\d,]+)|₩([\d,]+))'
+        r'</span>',
+        card,
     )
-    for asin, block in blocks:
-        title_m = re.search(r'aria-label="([^"]+)"', block) or re.search(r'<span class="[^"]*a-text-normal[^"]*">([^<]+)</span>', block)
-        price_m = re.search(r'<span class="a-offscreen">\$([\d,.]+)</span>', block)
-        review_m = re.search(r'(\d+(?:,\d+)*)\s*(?:rating|review)', block, re.I)
-        fbm_m = re.search(r'Ships from\s+([^<]+)<', block)
+    if p:
+        if p.group(1):
+            info["price_display"] = f"${p.group(1)}"
+            info["price_num"] = float(p.group(1).replace(",", ""))
+            info["currency"] = "USD"
+        elif p.group(2):
+            info["price_display"] = f"KRW {p.group(2)}"
+            info["price_num"] = float(p.group(2).replace(",", ""))
+            info["currency"] = "KRW"
+        elif p.group(3):
+            info["price_display"] = f"₩{p.group(3)}"
+            info["price_num"] = float(p.group(3).replace(",", ""))
+            info["currency"] = "KRW"
 
-        items.append({
-            "asin": asin,
-            "title": (title_m.group(1) if title_m else "").strip(),
-            "price": float(price_m.group(1).replace(",", "")) if price_m else None,
-            "review_count": int(review_m.group(1).replace(",", "")) if review_m else 0,
-            "is_fbm": "fbm" in (fbm_m.group(1).lower() if fbm_m else ""),
-        })
-    return items
+    # Rating (X.Y out of 5 stars)
+    rt = re.search(r"(\d\.\d)\s*out of 5 stars", card)
+    if rt:
+        info["rating"] = float(rt.group(1))
+
+    # Review count (aria-label="12,345 ratings")
+    rv = re.search(r'aria-label="([\d,]+)\s*ratings?"', card)
+    if rv:
+        info["reviews"] = int(rv.group(1).replace(",", ""))
+
+    # Bought in past month ("2K+", "500+", "1M+" 등)
+    bo = re.search(r">([\d,]+[KM]?\+?)\s*bought in past month<", card)
+    if bo:
+        info["bought_monthly"] = bo.group(1)
+
+    info["kr_shipping"] = _detect_kr_shipping(card)
+    return info
 
 
-def _aggregate(items: list[dict]) -> dict:
-    """개별 리스팅 → 키워드 집계."""
-    prices = sorted([i["price"] for i in items if i.get("price")])
-    if not prices:
-        return {
-            "price_min": None, "price_p25": None, "price_median": None,
-            "price_p75": None, "price_max": None,
-            "avg_review_count": 0, "min_review_count": 0,
-            "fbm_count": 0, "total_results": len(items),
-        }
+def _parse_search_page(html: str) -> list[dict]:
+    """검색 결과 HTML → 카드별 dict 리스트."""
+    return [_parse_card(asin, card) for asin, card in _extract_cards(html)]
 
-    def _pct(arr, p):
+
+def _is_1k_plus(marker: Optional[str]) -> bool:
+    """'2K+', '1.5K+', '3M+' 등 → True. 숫자만('500') → False."""
+    return bool(marker) and ("K" in marker or "M" in marker)
+
+
+def _aggregate(items: list[dict], region: Literal["US", "KR"] = "US") -> dict:
+    """개별 리스팅 → 키워드 집계 (region-aware).
+
+    region='US' → USD 가격만 quartile 계산.
+    region='KR' → KRW 가격만 quartile 계산.
+    비가격 필드(rating, reviews, kr_shipping)는 전체 items 기준.
+    """
+    target_currency = "KRW" if region == "KR" else "USD"
+    priced_items = [i for i in items if i.get("currency") == target_currency and i.get("price_num") is not None]
+    prices = sorted([i["price_num"] for i in priced_items])
+
+    def _pct(arr: list[float], p: float) -> Optional[float]:
+        if not arr:
+            return None
         idx = int(len(arr) * p)
         return arr[min(idx, len(arr) - 1)]
 
-    reviews = [i["review_count"] for i in items if i.get("review_count") is not None]
+    ratings = [i["rating"] for i in items if i.get("rating") is not None]
+    reviews = [i["reviews"] for i in items if i.get("reviews") is not None]
+
+    kr_ok = sum(1 for i in items if i.get("kr_shipping") == "OK")
+    kr_no = sum(1 for i in items if i.get("kr_shipping") == "NO")
+    kr_unk = sum(1 for i in items if i.get("kr_shipping") == "UNKNOWN")
+
     return {
-        "price_min": prices[0],
+        "region": region,
+        "currency": target_currency,
+        "price_min": prices[0] if prices else None,
         "price_p25": _pct(prices, 0.25),
         "price_median": _pct(prices, 0.50),
         "price_p75": _pct(prices, 0.75),
-        "price_max": prices[-1],
-        "avg_review_count": int(sum(reviews) / len(reviews)) if reviews else 0,
+        "price_max": prices[-1] if prices else None,
+        "avg_review_count": float(sum(reviews) / len(reviews)) if reviews else 0.0,
         "min_review_count": min(reviews) if reviews else 0,
-        "fbm_count": sum(1 for i in items if i.get("is_fbm")),
+        "avg_rating": round(sum(ratings) / len(ratings), 2) if ratings else None,
+        # 새 파서에서 미추출 — 스키마 컬럼만 채움
+        "prime_count": 0,
+        "fba_count": 0,
+        "fbm_count": 0,
         "total_results": len(items),
+        "priced_results": len(priced_items),
+        "bought_1k_plus_count": sum(1 for i in items if _is_1k_plus(i.get("bought_monthly"))),
+        "kr_shipping_ok_count": kr_ok,
+        "kr_shipping_no_count": kr_no,
+        "kr_shipping_unknown_count": kr_unk,
     }
 
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Crawl loop
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def crawl_keywords(
     keywords: list[str],
@@ -147,13 +270,9 @@ def crawl_keywords(
 ) -> dict:
     """키워드 리스트를 순차 크롤링 → DB 저장.
 
-    네트워크: ZenRows API 경유. 프록시 불필요.
-
     region:
-      'US' (기본) — 표준 Amazon.com (USD, 일반 US 배송)
-      'KR'       — ZenRows proxy_country='kr' → KRW 가격 + Republic of Korea 배송 정보
-
-    Returns: {"crawled": N, "aborted": bool, "captcha_count": N, "total_keywords": N, "region": str}
+      'US' (기본) — Amazon.com 표준 (USD, 일반 US 배송)
+      'KR'       — ZenRows proxy_country='kr' → KRW 가격 + Republic of Korea 배송
     """
     if delayer is None:
         delayer = CrawlerDelayer(
@@ -194,13 +313,16 @@ def crawl_keywords(
                 delayer.report_failure()
                 continue
 
-            agg = _aggregate(items)
+            agg = _aggregate(items, region=region)
             _save_results(kw, items, agg)
             delayer.report_success()
             crawled += 1
             logger.info(
-                f"[ZenRows][{region}][{kw}] 수집 {len(items)}개, "
-                f"p75=${agg['price_p75']}, size={size_kb}KB"
+                f"[ZenRows][{region}][{kw}] 수집 {len(items)}개 "
+                f"(가격 {agg['priced_results']}/{len(items)} {agg['currency']}), "
+                f"p75={agg['price_p75']}, rating_avg={agg['avg_rating']}, "
+                f"KR_OK={agg['kr_shipping_ok_count']}, 1K+={agg['bought_1k_plus_count']}, "
+                f"size={size_kb}KB"
             )
 
         except Exception as e:
@@ -223,21 +345,34 @@ def _save_results(keyword: str, items: list[dict], agg: dict) -> None:
                 continue
             conn.execute(
                 """INSERT OR REPLACE INTO amazon_search_results
-                   (keyword, asin, title, price, review_count, is_fbm, collected_at)
-                   VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-                (keyword, it["asin"], it["title"], it.get("price"),
-                 it.get("review_count", 0), 1 if it.get("is_fbm") else 0),
+                   (keyword, asin, title, price, review_count, rating, is_fbm, collected_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                (
+                    keyword,
+                    it["asin"],
+                    it.get("title", ""),
+                    it.get("price_num"),
+                    it.get("reviews", 0),
+                    it.get("rating"),
+                    1 if it.get("is_fbm") else 0,
+                ),
             )
 
         conn.execute(
             """INSERT OR REPLACE INTO amazon_search_agg
                (keyword, price_min, price_p25, price_median, price_p75, price_max,
-                avg_review_count, min_review_count, fbm_count, total_results, collected_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-            (keyword, agg.get("price_min"), agg.get("price_p25"),
-             agg.get("price_median"), agg.get("price_p75"), agg.get("price_max"),
-             agg.get("avg_review_count", 0), agg.get("min_review_count", 0),
-             agg.get("fbm_count", 0), agg.get("total_results", 0)),
+                avg_review_count, min_review_count, avg_rating,
+                prime_count, fba_count, fbm_count, total_results, collected_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            (
+                keyword,
+                agg.get("price_min"), agg.get("price_p25"),
+                agg.get("price_median"), agg.get("price_p75"), agg.get("price_max"),
+                agg.get("avg_review_count", 0), agg.get("min_review_count", 0),
+                agg.get("avg_rating"),
+                agg.get("prime_count", 0), agg.get("fba_count", 0), agg.get("fbm_count", 0),
+                agg.get("total_results", 0),
+            ),
         )
 
 
