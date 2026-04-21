@@ -6,18 +6,23 @@ amazon_keyword_crawler.py — DS 전용 Amazon 키워드 크롤러 (Phase 1+ Gap
   amazon_search_results (개별 리스팅) + amazon_search_agg (집계) 테이블을 채운다.
   scoring_service.calculate_gap_score 가 이 집계 데이터를 소비한다.
 
-차단 방지 정책 (작업지시서 명시):
-  - 요청 간 15-25초 랜덤 딜레이
-  - 50 키워드마다 2-3분 쿨다운
-  - CAPTCHA 감지 시 5분 대기
-  - 연속 실패 3회 → 10분 정지, 5회 → 중단
-  - User-Agent 로테이션
-  - Webshare 프록시 US 10 IP (셀러 계정과 IP 분리)
+네트워크 경로 (2026-04-22 변경):
+  기존: Webshare residential 프록시 + requests 직접
+  현재: ZenRows API (https://api.zenrows.com/v1/) 경유 + premium_proxy=true
+  변경 사유: Webshare pool 이 Amazon WAF 에 차단됨 (datacenter/residential 무관 503/202).
 
-EC2 의존: PROXY_* 환경변수 + Playwright Chromium.
+크레딧 / 비용:
+  premium_proxy=true, js_render 미사용 기준 요청당 약 5 크레딧.
+  검색 결과 HTML 은 JS 렌더 불필요 (SSR 포함됨).
+
+CAPTCHA / 차단:
+  ZenRows 가 자동 재시도 + 프록시 로테이션 수행. 클라이언트 측 딜레이는 최소화
+  (내부 fallback delayer: 5-10s 간격). CAPTCHA/"Sorry" 마커 감지 시 delayer 실패 기록.
+
+EC2 의존: ZENROWS_API_KEY 환경변수만 필요. 프록시 없음.
 """
 import logging
-import random
+import os
 import re
 import time
 from typing import Optional
@@ -25,44 +30,46 @@ from urllib.parse import quote_plus
 
 import requests
 
-from backend_shared.utils.proxy_pool import get_default_pool
 from backend_shared.utils.rate_limiter import CrawlerDelayer
 from backend.dropshipping.database import get_db
 
 logger = logging.getLogger(__name__)
 
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7; rv:124.0) Gecko/20100101 Firefox/124.0",
-]
+ZENROWS_API_KEY = os.getenv("ZENROWS_API_KEY", "")
+ZENROWS_ENDPOINT = "https://api.zenrows.com/v1/"
 
 
-def _make_headers() -> dict:
-    return {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "sec-ch-ua": '"Chromium";v="123", "Not.A/Brand";v="24"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"macOS"',
-        "sec-fetch-site": "none",
-        "sec-fetch-mode": "navigate",
-        "sec-fetch-user": "?1",
-        "sec-fetch-dest": "document",
+def _zenrows_get(amazon_url: str, timeout: int = 60) -> requests.Response:
+    """Amazon URL을 ZenRows API 경유로 페치.
+
+    요청당 ~5 크레딧(premium_proxy=true, js_render 미사용).
+    ZenRows가 프록시 로테이션/재시도/WAF 우회를 자동 수행.
+    """
+    if not ZENROWS_API_KEY:
+        raise RuntimeError("ZENROWS_API_KEY not configured in environment")
+
+    params = {
+        "apikey": ZENROWS_API_KEY,
+        "url": amazon_url,
+        "premium_proxy": "true",
     }
+    return requests.get(ZENROWS_ENDPOINT, params=params, timeout=timeout)
 
 
-def _detect_captcha(html: str) -> bool:
+def _detect_blocked(html: str) -> bool:
+    """Amazon 차단/에러 페이지 감지.
+
+    ZenRows 를 거쳐도 Amazon 이 차단 페이지를 반환하면 본문에 이 마커들이 포함됨.
+    """
+    lower = html.lower()
     return (
-        "captcha" in html.lower()
+        "captcha" in lower
         or "Enter the characters you see below" in html
         or "Robot Check" in html
+        or "Sorry! Something went wrong" in html
+        or "challenge-container" in html
+        or "AwsWafIntegration" in html
     )
 
 
@@ -73,7 +80,6 @@ def _parse_search_page(html: str) -> list[dict]:
     실패 시 빈 리스트.
     """
     items = []
-    # 거친 정규식 파싱 — Playwright 사용 시 더 정확한 selector 로 교체
     blocks = re.findall(
         r'data-asin="([A-Z0-9]{10})"[^>]*>(.*?)</div></div></div>',
         html,
@@ -130,51 +136,59 @@ def crawl_keywords(
 ) -> dict:
     """키워드 리스트를 순차 크롤링 → DB 저장.
 
-    Returns: {"crawled": N, "aborted": bool, "captcha_count": N}
+    네트워크: ZenRows API 경유. 프록시 불필요.
+    Returns: {"crawled": N, "aborted": bool, "captcha_count": N, "total_keywords": N}
     """
     if delayer is None:
-        delayer = CrawlerDelayer(name="amazon_keyword_crawler")
+        # ZenRows 가 rate-limit 관리 → 클라이언트 측 딜레이 축소 (15-25s → 5-10s)
+        delayer = CrawlerDelayer(
+            delay_min=5.0,
+            delay_max=10.0,
+            name="amazon_keyword_crawler_zr",
+        )
 
-    pool = get_default_pool()
     captcha_count = 0
     crawled = 0
 
     for kw in keywords:
         if not delayer.before_request():
-            logger.error("크롤러 중단 — 연속 실패 임계값 초과")
+            logger.error("⛔ [ZenRows] 크롤러 중단 — 연속 실패 임계값 초과")
             break
 
         url = f"https://www.amazon.com/s?k={quote_plus(kw)}&ref=nb_sb_noss"
         try:
-            r = requests.get(
-                url,
-                headers=_make_headers(),
-                proxies=pool.get(),
-                timeout=20,
-                allow_redirects=True,
-            )
+            r = _zenrows_get(url, timeout=60)
 
             if r.status_code != 200:
-                logger.warning(f"[{kw}] HTTP {r.status_code}")
+                logger.warning(f"[ZenRows][{kw}] HTTP {r.status_code}")
                 delayer.report_failure()
                 continue
 
-            if _detect_captcha(r.text):
+            size_kb = len(r.content) // 1024
+
+            if _detect_blocked(r.text):
                 captcha_count += 1
-                logger.warning(f"[{kw}] CAPTCHA 감지")
+                logger.warning(f"[ZenRows][{kw}] 차단/CAPTCHA 마커 감지 (size={size_kb}KB)")
                 delayer.report_failure(captcha=True)
                 continue
 
             items = _parse_search_page(r.text)
-            agg = _aggregate(items)
+            if not items:
+                logger.warning(f"[ZenRows][{kw}] 파싱 결과 0건 (size={size_kb}KB)")
+                delayer.report_failure()
+                continue
 
+            agg = _aggregate(items)
             _save_results(kw, items, agg)
             delayer.report_success()
             crawled += 1
-            logger.info(f"[{kw}] 수집 {len(items)}개, p75=${agg['price_p75']}")
+            logger.info(
+                f"[ZenRows][{kw}] 수집 {len(items)}개, "
+                f"p75=${agg['price_p75']}, size={size_kb}KB"
+            )
 
         except Exception as e:
-            logger.error(f"[{kw}] 크롤 실패: {e}")
+            logger.error(f"[ZenRows][{kw}] 크롤 실패: {e}")
             delayer.report_failure()
 
     return {
@@ -187,7 +201,6 @@ def crawl_keywords(
 
 def _save_results(keyword: str, items: list[dict], agg: dict) -> None:
     with get_db() as conn:
-        # 개별 리스팅
         for it in items:
             if not it.get("asin"):
                 continue
@@ -199,7 +212,6 @@ def _save_results(keyword: str, items: list[dict], agg: dict) -> None:
                  it.get("review_count", 0), 1 if it.get("is_fbm") else 0),
             )
 
-        # 키워드 집계
         conn.execute(
             """INSERT OR REPLACE INTO amazon_search_agg
                (keyword, price_min, price_p25, price_median, price_p75, price_max,
