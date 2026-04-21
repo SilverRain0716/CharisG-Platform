@@ -263,17 +263,137 @@ def _aggregate(items: list[dict], region: Literal["US", "KR"] = "US") -> dict:
 # Crawl loop
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def _build_search_url(kw: str, page: int) -> str:
+    base = f"https://www.amazon.com/s?k={quote_plus(kw)}&ref=nb_sb_noss"
+    if page > 1:
+        base += f"&page={page}"
+    return base
+
+
+def _save_raw_response(kw: str, page: int, r: "requests.Response") -> None:
+    """응답을 /tmp/zenrows_raw/ 에 저장. 상태별 suffix로 식별."""
+    ts = int(time.time())
+    safe_kw = kw.replace(" ", "_")
+    if r.status_code != 200:
+        suffix = f"HTTP{r.status_code}"
+    elif len(r.content) < 500_000:
+        suffix = f"SMALL{len(r.content)}"
+    else:
+        suffix = "OK"
+    fname = f"/tmp/zenrows_raw/{safe_kw}_{page}_{ts}_{suffix}.html"
+    try:
+        with open(fname, "w") as f:
+            f.write(r.text)
+    except Exception as e:
+        logger.warning(f"[{kw}] page={page} raw save failed: {e}")
+
+
+def _fetch_page_with_retry(
+    kw: str,
+    page: int,
+    proxy_country: Optional[str],
+    delayer: CrawlerDelayer,
+    save_raw_html: bool,
+    max_retries: int = 1,
+) -> tuple[bool, Optional["requests.Response"], str, int]:
+    """단일 페이지 요청 + 재시도.
+
+    Returns:
+        (success, response, failure_reason, attempts_used)
+
+    failure_reason: "" on success. 실패 시:
+        "delayer_aborted" — delayer 중단으로 시도 불가
+        "request_exception" — requests 예외 (네트워크 실패 등)
+        "http_error" — r.status_code != 200
+        "soft_block" — 응답 크기 < 500KB
+    attempts_used: 실제 수행된 시도 수.
+
+    save_raw_html=True 면 **사이즈 가드 이전**에 매 응답 저장 (소프트 블록 본문도 보존).
+    retry 간 추가 sleep 없음 — 다음 `delayer.before_request()` 의 자체 슬립에 위임.
+    """
+    total_attempts = 1 + max_retries
+    last_reason = ""
+    last_response: Optional["requests.Response"] = None
+    attempts_done = 0
+
+    for attempt in range(1, total_attempts + 1):
+        if not delayer.before_request():
+            return False, last_response, "delayer_aborted", attempts_done
+
+        attempts_done = attempt
+        url = _build_search_url(kw, page)
+
+        try:
+            r = _zenrows_get(url, proxy_country=proxy_country, timeout=60)
+        except Exception as e:
+            logger.warning(
+                f"[{kw}] page={page} attempt={attempt}/{total_attempts} "
+                f"failed: request_exception ({e})"
+            )
+            delayer.report_failure()
+            last_reason = "request_exception"
+            last_response = None
+            continue
+
+        if save_raw_html:
+            _save_raw_response(kw, page, r)
+
+        if r.status_code != 200:
+            logger.warning(
+                f"[{kw}] page={page} attempt={attempt}/{total_attempts} "
+                f"failed: HTTP {r.status_code}"
+            )
+            delayer.report_failure()
+            last_reason = "http_error"
+            last_response = r
+            continue
+
+        if len(r.content) < 500_000:
+            logger.warning(
+                f"[{kw}] page={page} attempt={attempt}/{total_attempts} "
+                f"failed: soft_block ({len(r.content)} bytes)"
+            )
+            delayer.report_failure()
+            last_reason = "soft_block"
+            last_response = r
+            continue
+
+        delayer.report_success()
+        if attempt > 1:
+            logger.info(f"[{kw}] page={page} retry succeeded on attempt={attempt}")
+        return True, r, "", attempt
+
+    logger.warning(
+        f"[{kw}] page={page} skipped after {total_attempts} attempts "
+        f"(last={last_reason}), continuing to next page"
+    )
+    return False, last_response, last_reason, attempts_done
+
+
 def crawl_keywords(
     keywords: list[str],
     delayer: Optional[CrawlerDelayer] = None,
     region: Literal["US", "KR"] = "US",
+    max_pages: int = 1,
+    smart_paginate: bool = False,
+    save_raw_html: bool = False,
 ) -> dict:
     """키워드 리스트를 순차 크롤링 → DB 저장.
 
     region:
-      'US' (기본) — Amazon.com 표준 (USD, 일반 US 배송)
-      'KR'       — ZenRows proxy_country='kr' → KRW 가격 + Republic of Korea 배송
+      'US' — Amazon.com 표준 (USD, deprecated)
+      'KR' — ZenRows proxy_country='kr' → KRW 가격 + Republic of Korea 배송
+
+    max_pages: 키워드당 크롤링 페이지 수 (1~10, 기본 1로 하위호환).
+    smart_paginate: True 면 page>=4 에서 신규 1K+ ASIN <=2 면 조기 중단.
+    save_raw_html: True 면 /tmp/zenrows_raw/ 에 매 응답 저장 (소프트 블록 포함).
+
+    페이지 단위 retry (기본 1회) 내장. 단일 페이지가 retry 까지 실패하면
+    해당 페이지만 skip 하고 다음 페이지 진행. 연속 2페이지 실패 시 키워드 중단.
     """
+    if not (1 <= max_pages <= 10):
+        raise ValueError(f"max_pages must be 1..10, got {max_pages}")
+
     if delayer is None:
         delayer = CrawlerDelayer(
             delay_min=5.0,
@@ -282,59 +402,104 @@ def crawl_keywords(
         )
 
     proxy_country = "kr" if region == "KR" else None
-    captcha_count = 0
-    crawled = 0
+    run_start_time = time.time()
+    per_keyword: dict = {}
+
+    if save_raw_html:
+        os.makedirs("/tmp/zenrows_raw", exist_ok=True)
 
     for kw in keywords:
-        if not delayer.before_request():
-            logger.error(f"⛔ [ZenRows][{region}] 크롤러 중단 — 연속 실패 임계값 초과")
-            break
+        kw_start_time = time.time()
+        seen_asins: set[str] = set()
+        kw_items: list[dict] = []
+        page_1k_counts: list[int] = []
+        page_extracted_counts: list[int] = []
+        page_sizes_kb: list[int] = []
+        pages_failed: list[int] = []
+        retry_count = 0
+        page_consecutive_failures = 0
+        pages_crawled = 0
+        stopped_reason = "max_pages"
 
-        url = f"https://www.amazon.com/s?k={quote_plus(kw)}&ref=nb_sb_noss"
-        try:
-            r = _zenrows_get(url, proxy_country=proxy_country, timeout=60)
+        for page in range(1, max_pages + 1):
+            success, r, reason, attempts = _fetch_page_with_retry(
+                kw, page, proxy_country, delayer,
+                save_raw_html=save_raw_html, max_retries=1,
+            )
+            retry_count += max(0, attempts - 1)
 
-            if r.status_code != 200:
-                logger.warning(f"[ZenRows][{region}][{kw}] HTTP {r.status_code}")
-                delayer.report_failure()
+            if reason == "delayer_aborted":
+                stopped_reason = "delayer_aborted"
+                break
+
+            if not success:
+                pages_failed.append(page)
+                page_consecutive_failures += 1
+                if page_consecutive_failures >= 2:
+                    stopped_reason = "consecutive_failures"
+                    logger.warning(
+                        f"[{kw}] consecutive_failures={page_consecutive_failures}, "
+                        f"stopping keyword"
+                    )
+                    break
                 continue
 
-            size_kb = len(r.content) // 1024
+            page_consecutive_failures = 0
+            page_sizes_kb.append(len(r.content) // 1024)
 
-            if _detect_blocked(r.text):
-                captcha_count += 1
-                logger.warning(f"[ZenRows][{region}][{kw}] 차단/CAPTCHA 마커 감지 (size={size_kb}KB)")
-                delayer.report_failure(captcha=True)
-                continue
+            page_items = _parse_search_page(r.text)
+            new_items = [it for it in page_items if it["asin"] not in seen_asins]
+            seen_asins.update(it["asin"] for it in new_items)
+            kw_items.extend(new_items)
+            pages_crawled = page
 
-            items = _parse_search_page(r.text)
-            if not items:
-                logger.warning(f"[ZenRows][{region}][{kw}] 파싱 결과 0건 (size={size_kb}KB)")
-                delayer.report_failure()
-                continue
+            extracted = sum(1 for it in new_items if it.get("bought_monthly"))
+            page_extracted_counts.append(extracted)
+            cnt_1k = sum(1 for it in new_items if _is_1k_plus(it.get("bought_monthly")))
+            page_1k_counts.append(cnt_1k)
 
-            agg = _aggregate(items, region=region)
-            _save_results(kw, items, agg)
-            delayer.report_success()
-            crawled += 1
             logger.info(
-                f"[ZenRows][{region}][{kw}] 수집 {len(items)}개 "
-                f"(가격 {agg['priced_results']}/{len(items)} {agg['currency']}), "
-                f"p75={agg['price_p75']}, rating_avg={agg['avg_rating']}, "
-                f"KR_OK={agg['kr_shipping_ok_count']}, 1K+={agg['bought_1k_plus_count']}, "
-                f"size={size_kb}KB"
+                f"[{kw}] page={page} items={len(page_items)} new={len(new_items)} "
+                f"1K+={cnt_1k} bought_extracted={extracted}/{len(new_items)}"
             )
 
-        except Exception as e:
-            logger.error(f"[ZenRows][{region}][{kw}] 크롤 실패: {e}")
-            delayer.report_failure()
+            if smart_paginate and page >= 4 and cnt_1k <= 2:
+                stopped_reason = "smart_stop"
+                break
 
+        kw_duration = time.time() - kw_start_time
+        if kw_items:
+            agg = _aggregate(kw_items, region=region)
+            _save_results(kw, kw_items, agg)
+        else:
+            agg = {}
+
+        total_res = agg.get("total_results") or 0
+        kr_ok = agg.get("kr_shipping_ok_count") or 0
+        kr_ok_pct = round(100.0 * kr_ok / total_res, 1) if total_res else None
+
+        per_keyword[kw] = {
+            "pages": pages_crawled,
+            "asins": len(kw_items),
+            "kr_ok_pct": kr_ok_pct,
+            "bought_monthly_extracted": sum(page_extracted_counts),
+            "page_1k_counts": page_1k_counts,
+            "page_extracted_counts": page_extracted_counts,
+            "page_sizes_kb": page_sizes_kb,
+            "pages_failed": pages_failed,
+            "retry_count": retry_count,
+            "stopped_reason": stopped_reason,
+            "duration_seconds": round(kw_duration, 1),
+        }
+
+    total_pages = sum(v["pages"] for v in per_keyword.values())
     return {
-        "crawled": crawled,
-        "aborted": delayer.aborted,
-        "captcha_count": captcha_count,
+        "per_keyword": per_keyword,
         "total_keywords": len(keywords),
-        "region": region,
+        "total_pages": total_pages,
+        "total_asins": sum(v["asins"] for v in per_keyword.values()),
+        "total_credits_est": total_pages * 5,
+        "duration_seconds": round(time.time() - run_start_time, 1),
     }
 
 
