@@ -64,56 +64,91 @@ export default function ProductManagementPage() {
   });
 
   const [batchProgress, setBatchProgress] = useState(null);
+  const [naverProgress, setNaverProgress] = useState(null);
+  const [coupangProgress, setCoupangProgress] = useState(null);
   const [generatingId, setGeneratingId] = useState(null);
   const [previewHtml, setPreviewHtml] = useState(null);
   const jobIdRef = useRef(null);
+  const naverJobIdRef = useRef(null);
+  const coupangJobIdRef = useRef(null);
   const pollRef = useRef(null);
 
-  // 폴링: jobIdRef에 job_id가 있으면 2초마다 상태 조회
+  const _jobToProgress = (job) => ({
+    pct: job.pct ?? 0,
+    current: (job.processed || 0) + (job.errors || 0),
+    total: job.total || 0,
+    processed: job.processed || 0,
+    errors: job.errors || 0,
+    status: job.status,
+    phase: job.phase_message,
+    message: job.error_message,
+  });
+
+  // 폴링: 3개 job 모두 2초마다 상태 조회
   useEffect(() => {
     const poll = async () => {
-      const jid = jobIdRef.current;
-      if (!jid) return;
-      try {
-        const job = await pa.getBatchJobStatus(jid);
-        const done = job.status === 'done' || job.status === 'error';
-        setBatchProgress({
-          pct: job.pct ?? 0,
-          current: job.processed + job.errors,
-          total: job.total,
-          processed: job.processed,
-          errors: job.errors,
-          status: job.status,
-          message: job.error_message,
-        });
-        if (done) {
-          jobIdRef.current = null;
-          qc.invalidateQueries({ queryKey: ['pa', 'products'] });
-        }
-      } catch { /* 네트워크 오류 무시, 다음 폴링에서 재시도 */ }
+      if (jobIdRef.current) {
+        try {
+          const job = await pa.getBatchJobStatus(jobIdRef.current);
+          const done = job.status === 'done' || job.status === 'error';
+          setBatchProgress(_jobToProgress(job));
+          if (done) {
+            jobIdRef.current = null;
+            qc.invalidateQueries({ queryKey: ['pa', 'products'] });
+          }
+        } catch {}
+      }
+      if (naverJobIdRef.current) {
+        try {
+          const job = await pa.naverCategoryJobStatus(naverJobIdRef.current);
+          const done = job.status === 'done' || job.status === 'error';
+          setNaverProgress(_jobToProgress(job));
+          if (done) {
+            naverJobIdRef.current = null;
+            qc.invalidateQueries({ queryKey: ['pa', 'products'] });
+          }
+        } catch {}
+      }
+      if (coupangJobIdRef.current) {
+        try {
+          const job = await pa.coupangCategoryJobStatus(coupangJobIdRef.current);
+          const done = job.status === 'done' || job.status === 'error';
+          setCoupangProgress(_jobToProgress(job));
+          if (done) {
+            coupangJobIdRef.current = null;
+            qc.invalidateQueries({ queryKey: ['pa', 'products'] });
+          }
+        } catch {}
+      }
     };
-
     pollRef.current = setInterval(poll, 2000);
     return () => clearInterval(pollRef.current);
   }, [qc]);
 
-  // 페이지 진입 시 실행 중인 job 자동 감지
+  // 페이지 진입 시 실행 중인 job 자동 감지 (3종)
   useEffect(() => {
     (async () => {
       try {
         const res = await pa.getCurrentBatchJob();
         if (res.job) {
           jobIdRef.current = res.job.id;
-          setBatchProgress({
-            pct: res.job.pct ?? 0,
-            current: res.job.processed + res.job.errors,
-            total: res.job.total,
-            processed: res.job.processed,
-            errors: res.job.errors,
-            status: res.job.status,
-          });
+          setBatchProgress(_jobToProgress(res.job));
         }
-      } catch { /* ignore */ }
+      } catch {}
+      try {
+        const res = await pa.currentNaverCategoryJob();
+        if (res.job) {
+          naverJobIdRef.current = res.job.id;
+          setNaverProgress(_jobToProgress(res.job));
+        }
+      } catch {}
+      try {
+        const res = await pa.currentCoupangCategoryJob();
+        if (res.job) {
+          coupangJobIdRef.current = res.job.id;
+          setCoupangProgress(_jobToProgress(res.job));
+        }
+      } catch {}
     })();
   }, []);
 
@@ -163,9 +198,33 @@ export default function ProductManagementPage() {
     }
   }, []);
 
-  const totalCount = data?.items?.length || 0;
-  const unprocessedCount = data?.items?.filter((r) => !r.ai_processed_at).length || 0;
-  const sendableCount = data?.items?.filter((r) => r.ai_processed_at).length || 0;
+  const startNaverMapJob = useCallback(async () => {
+    setNaverProgress({ pct: 0, current: 0, total: 0, status: 'running', phase: '시작 중' });
+    try {
+      const res = await pa.startNaverCategoryMap();
+      naverJobIdRef.current = res.job_id;
+    } catch (e) {
+      setNaverProgress({ pct: 0, status: 'error', message: e.message || '네이버 매핑 시작 실패' });
+    }
+  }, []);
+
+  const startCoupangMapJob = useCallback(async () => {
+    setCoupangProgress({ pct: 0, current: 0, total: 0, status: 'running', phase: '시작 중' });
+    try {
+      const res = await pa.startCoupangCategoryMap();
+      coupangJobIdRef.current = res.job_id;
+    } catch (e) {
+      setCoupangProgress({ pct: 0, status: 'error', message: e.message || '쿠팡 매핑 시작 실패' });
+    }
+  }, []);
+
+  const totalCount = data?.total || 0;
+  const unprocessedCount = data?.unprocessed_count ?? data?.items?.filter((r) => !r.ai_processed_at).length ?? 0;
+  const sendableCount = data?.processed_count ?? data?.items?.filter((r) => r.ai_processed_at).length ?? 0;
+  const naverPending = data?.naver_category_pending ?? 0;
+  const coupangPending = data?.coupang_category_pending ?? 0;
+  const naverRunning = naverProgress?.status === 'running' || naverProgress?.status === 'pending';
+  const coupangRunning = coupangProgress?.status === 'running' || coupangProgress?.status === 'pending';
 
   const [bulkSending, setBulkSending] = useState(false);
   const [bulkSendResult, setBulkSendResult] = useState(null);
@@ -203,6 +262,30 @@ export default function ProductManagementPage() {
             />
             전체 상품 보기
           </label>
+          {naverPending > 0 && (
+            <Button
+              variant="ghost"
+              disabled={naverRunning}
+              onClick={startNaverMapJob}
+              title="products.category_path(영문)를 네이버 leaf ID로 매핑"
+            >
+              {naverRunning
+                ? `네이버 매핑 중… ${naverProgress?.pct ?? 0}%`
+                : `네이버 카테고리 매핑 (${naverPending}건)`}
+            </Button>
+          )}
+          {coupangPending > 0 && (
+            <Button
+              variant="ghost"
+              disabled={coupangRunning}
+              onClick={startCoupangMapJob}
+              title="네이버 ID → 쿠팡 카테고리 코드 매핑 (채널 보내기 이후)"
+            >
+              {coupangRunning
+                ? `쿠팡 매핑 중… ${coupangProgress?.pct ?? 0}%`
+                : `쿠팡 카테고리 매핑 (${coupangPending}건)`}
+            </Button>
+          )}
           {sendableCount > 0 && (
             <Button
               variant="ghost"
@@ -231,13 +314,14 @@ export default function ProductManagementPage() {
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
               <span>
+                <span className="font-medium mr-2">[AI 상세 생성]</span>
                 {batchProgress.status === 'done'
                   ? `완료 — 성공 ${batchProgress.processed}건, 실패 ${batchProgress.errors}건`
                   : batchProgress.status === 'error'
                     ? `오류: ${batchProgress.message || '알 수 없는 오류'}`
                     : `처리 중 ${batchProgress.current}/${batchProgress.total}`}
               </span>
-              {batchProgress.status !== 'running' && (
+              {batchProgress.status !== 'running' && batchProgress.status !== 'pending' && (
                 <Button size="sm" variant="ghost" onClick={() => setBatchProgress(null)}>닫기</Button>
               )}
             </div>
@@ -245,6 +329,58 @@ export default function ProductManagementPage() {
               <div
                 className="h-full rounded-full bg-indigo-500 transition-all duration-300"
                 style={{ width: `${batchProgress.pct ?? 0}%` }}
+              />
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {naverProgress && (
+        <Card padded>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span>
+                <span className="font-medium mr-2">[네이버 카테고리 매핑]</span>
+                {naverProgress.status === 'done'
+                  ? (naverProgress.phase || `완료 — 성공 ${(naverProgress.processed || 0) - (naverProgress.errors || 0)}건, 실패 ${naverProgress.errors}건`)
+                  : naverProgress.status === 'error'
+                    ? `오류: ${naverProgress.message || '알 수 없는 오류'}`
+                    : (naverProgress.phase || `처리 중 ${naverProgress.current}/${naverProgress.total}`)}
+              </span>
+              {naverProgress.status !== 'running' && naverProgress.status !== 'pending' && (
+                <Button size="sm" variant="ghost" onClick={() => setNaverProgress(null)}>닫기</Button>
+              )}
+            </div>
+            <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-all duration-300"
+                style={{ width: `${naverProgress.pct ?? 0}%` }}
+              />
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {coupangProgress && (
+        <Card padded>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span>
+                <span className="font-medium mr-2">[쿠팡 카테고리 매핑]</span>
+                {coupangProgress.status === 'done'
+                  ? (coupangProgress.phase || `완료 — 성공 ${(coupangProgress.processed || 0) - (coupangProgress.errors || 0)}건, 실패 ${coupangProgress.errors}건`)
+                  : coupangProgress.status === 'error'
+                    ? `오류: ${coupangProgress.message || '알 수 없는 오류'}`
+                    : (coupangProgress.phase || `처리 중 ${coupangProgress.current}/${coupangProgress.total}`)}
+              </span>
+              {coupangProgress.status !== 'running' && coupangProgress.status !== 'pending' && (
+                <Button size="sm" variant="ghost" onClick={() => setCoupangProgress(null)}>닫기</Button>
+              )}
+            </div>
+            <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-rose-500 transition-all duration-300"
+                style={{ width: `${coupangProgress.pct ?? 0}%` }}
               />
             </div>
           </div>

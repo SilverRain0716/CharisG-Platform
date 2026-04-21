@@ -27,7 +27,9 @@ export const pa = {
   },
   importSheet:          (sheet_url) => apiFetch('/api/pa/sourcing/import-sheet', { method: 'POST', body: { sheet_url } }),
   bulkDeleteCandidates: (ids) => apiFetch('/api/pa/sourcing/bulk-delete', { method: 'POST', body: { ids } }),
-  promoteAllSourcing:   () => apiFetch('/api/pa/sourcing/promote-all', { method: 'POST', body: {} }),
+  startPromoteJob:      () => apiFetch('/api/pa/sourcing/promote-all', { method: 'POST', body: {} }),
+  getPromoteJobStatus:  (jobId) => apiFetch(`/api/pa/sourcing/promote-all/${jobId}`),
+  getCurrentPromoteJob: () => apiFetch('/api/pa/sourcing/promote-all'),
 
   // Customs
   customsQuick:   (req) => apiFetch('/api/pa/customs/quick', { method: 'POST', body: req }),
@@ -41,6 +43,14 @@ export const pa = {
   product:        (id) => apiFetch(`/api/pa/products/${id}`),
   setProductStatus: (id, status) => apiFetch(`/api/pa/products/${id}/status`, { method: 'PATCH', body: { status } }),
   bulkDeleteProducts: (body) => apiFetch('/api/pa/products/bulk-delete', { method: 'POST', body }),
+
+  // Channel prepare (category mapping)
+  startNaverCategoryMap:   () => apiFetch('/api/pa/products/prepare-naver-category', { method: 'POST', body: {} }),
+  naverCategoryJobStatus:  (jobId) => apiFetch(`/api/pa/products/prepare-naver-category/${jobId}`),
+  currentNaverCategoryJob: () => apiFetch('/api/pa/products/prepare-naver-category'),
+  startCoupangCategoryMap:   () => apiFetch('/api/pa/products/prepare-coupang-category', { method: 'POST', body: {} }),
+  coupangCategoryJobStatus:  (jobId) => apiFetch(`/api/pa/products/prepare-coupang-category/${jobId}`),
+  currentCoupangCategoryJob: () => apiFetch('/api/pa/products/prepare-coupang-category'),
 
   // Detail page
   generateDetail: (pid) => apiFetch(`/api/pa/detail-page/${pid}/generate`, { method: 'POST' }),
@@ -64,6 +74,11 @@ export const pa = {
   smartstoreUploadStatus:    (jobId) => apiFetch(`/api/pa/smartstore/upload-all/${jobId}`),
   coupangUploadJob:          () => apiFetch('/api/pa/coupang/upload-job'),
   coupangUploadStatus:       (jobId) => apiFetch(`/api/pa/coupang/upload-all/${jobId}`),
+
+  // Coupang approval request (saveV2 → requests/approval)
+  startCoupangApproval:      () => apiFetch('/api/pa/coupang/request-approval-all', { method: 'POST', body: {} }),
+  coupangApprovalJobStatus:  (jobId) => apiFetch(`/api/pa/coupang/request-approval-all/${jobId}`),
+  currentCoupangApprovalJob: () => apiFetch('/api/pa/coupang/request-approval-all'),
 
   // Orders
   ordersKanban:   () => apiFetch('/api/pa/orders/kanban'),
