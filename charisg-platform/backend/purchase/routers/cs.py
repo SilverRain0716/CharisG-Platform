@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.purchase.auth import current_user
-from backend.purchase.database import get_db
+from backend.purchase.database import get_db_hot as get_db
 from backend_shared.ai import generate_cs_draft
 
 router = APIRouter(prefix="/api/pa/cs", tags=["pa-cs"])
@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api/pa/cs", tags=["pa-cs"])
 def list_tickets(
     user: dict = Depends(current_user),
     status: Optional[str] = None,
+    channel: Optional[str] = None,
     limit: int = 100,
 ):
     where = []
@@ -22,6 +23,9 @@ def list_tickets(
     if status:
         where.append("status=?")
         params.append(status)
+    if channel:
+        where.append("channel=?")
+        params.append(channel)
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     with get_db() as conn:
         rows = conn.execute(

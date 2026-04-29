@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, KanbanBoard, DataTable, StatusBadge } from '@charisg/ui';
 import { pa } from '../api/pa.js';
@@ -16,6 +17,7 @@ const CS_COLS = [
 
 export default function OrdersAndCsPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const kanban = useQuery({ queryKey: ['pa', 'orders', 'kanban'], queryFn: pa.ordersKanban });
   const cs = useQuery({ queryKey: ['pa', 'cs'], queryFn: () => pa.cs() });
   const ret = useQuery({ queryKey: ['pa', 'returns'], queryFn: pa.returns });
@@ -40,7 +42,11 @@ export default function OrdersAndCsPage() {
             <KanbanBoard
               columns={kanban.data || []}
               renderCard={(item) => (
-                <div className="space-y-1">
+                <div
+                  className="space-y-1 cursor-pointer"
+                  onClick={() => navigate(`/orders/${item.id}`)}
+                  title="클릭해서 상세 보기"
+                >
                   <div className="text-xs font-medium text-ink-900">{item.customer_name || '—'}</div>
                   <div className="text-[11px] text-ink-500">{item.channel} · ₩{item.sale_price_krw?.toLocaleString() || 0}</div>
                   <div className="text-[10px] text-ink-400">{item.placed_at?.slice(0, 10)}</div>

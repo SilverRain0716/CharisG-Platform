@@ -7,7 +7,7 @@ CJ Open API webhook + 수동 트래킹 번호 등록 → orders 테이블 동기
 import logging
 from typing import Optional
 
-from backend.purchase.database import get_db
+from backend.purchase.database import get_db_hot as get_db
 
 logger = logging.getLogger(__name__)
 

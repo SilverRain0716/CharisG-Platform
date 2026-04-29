@@ -58,128 +58,29 @@ _PAT_SP_IMG_ID = re.compile(r'/I/([A-Za-z0-9+_%-]+?)(?:\._[^/]*)?\.jpg')
 
 
 def fetch_amazon_images_sp_api(asin: str, max_images: int = 15) -> list[str]:
-    """SP-API Catalog Items로 이미지 URL 수집 (hiRes 우선).
+    """SP-API 이미지 URL 수집 — sp_api_facts 단일 호출 + 캐시 경유.
 
-    Returns: 이미지 URL 리스트 (최대 max_images개, 중복 제거, 큰 해상도 우선).
+    같은 ASIN 에 대해 7일 내 재호출 0 (DB 캐시).
     """
     try:
-        from sp_api.api import CatalogItems
-        from sp_api.base import Marketplaces
-        from backend.dropshipping.services.amazon_sp_api_service import get_credentials
+        from backend.purchase.services.sp_api_facts import get_image_urls
     except ImportError:
-        logger.warning("sp_api 모듈 없음 — SP-API 이미지 수집 불가")
+        logger.warning("sp_api_facts 모듈 없음 — SP-API 이미지 수집 불가")
         return []
-
-    try:
-        creds = get_credentials()
-        catalog = CatalogItems(credentials=creds, marketplace=Marketplaces.US)
-        resp = catalog.get_catalog_item(
-            asin=asin,
-            includedData="images",
-            marketplaceIds=["ATVPDKIKX0DER"],
-        )
-        item = resp.payload
-        image_sets = item.get("images", [])
-        if not image_sets:
-            return []
-
-        # MAIN variant 우선
-        main_set = image_sets[0]
-        for s in image_sets:
-            if s.get("variant") == "MAIN":
-                main_set = s
-                break
-
-        raw_images = main_set.get("images", [])
-
-        # 이미지 ID별 가장 큰 해상도만 선택
-        best_by_id: dict[str, tuple[int, str]] = {}
-        for img in raw_images:
-            url = img.get("link", "")
-            w = img.get("width", 0)
-            h = img.get("height", 0)
-            area = w * h
-            m = _PAT_SP_IMG_ID.search(url)
-            img_id = m.group(1) if m else url
-            if img_id not in best_by_id or area > best_by_id[img_id][0]:
-                best_by_id[img_id] = (area, url)
-
-        sorted_imgs = sorted(best_by_id.values(), key=lambda x: -x[0])
-        result = [url for _, url in sorted_imgs[:max_images]]
-        logger.info(f"🔍 SP-API {asin}: {len(result)}장 이미지 수집")
-        return result
-
-    except Exception as e:
-        logger.warning(f"SP-API 이미지 수집 실패 ({asin}): {e}")
-        return []
+    return get_image_urls(asin, max_images)
 
 
 def fetch_product_info_sp_api(asin: str) -> dict:
-    """SP-API로 상품 기본정보 수집 (title, brand, description, images).
+    """SP-API 상품 기본정보 — sp_api_facts 경유 (캐시 우선).
 
-    Returns: {title, brand, description, images: [url, ...]} 또는 빈 dict.
+    Returns (기존 형식 유지): {title, brand, description, bullet_points, images}.
     """
     try:
-        from sp_api.api import CatalogItems
-        from sp_api.base import Marketplaces
-        from backend.dropshipping.services.amazon_sp_api_service import get_credentials
+        from backend.purchase.services.sp_api_facts import get_facts_for_promote
     except ImportError:
         return {}
-
     try:
-        creds = get_credentials()
-        catalog = CatalogItems(credentials=creds, marketplace=Marketplaces.US)
-        resp = catalog.get_catalog_item(
-            asin=asin,
-            includedData="summaries,attributes,images",
-            marketplaceIds=["ATVPDKIKX0DER"],
-        )
-        item = resp.payload
-        result: dict = {}
-
-        # summaries → title, brand
-        summaries = item.get("summaries", [])
-        if summaries:
-            s = summaries[0]
-            result["title"] = s.get("itemName", "")
-            result["brand"] = s.get("brand", "")
-
-        # attributes → description, bullet_point
-        attrs = item.get("attributes", {})
-        if attrs:
-            # bullet_point
-            bullets = attrs.get("bullet_point", [])
-            if bullets:
-                result["bullet_points"] = [
-                    b.get("value", "") for b in bullets if b.get("value")
-                ]
-            # product_description
-            descs = attrs.get("product_description", [])
-            if descs:
-                result["description"] = descs[0].get("value", "")
-
-        # images
-        image_sets = item.get("images", [])
-        if image_sets:
-            main_set = image_sets[0]
-            for s in image_sets:
-                if s.get("variant") == "MAIN":
-                    main_set = s
-                    break
-            raw = main_set.get("images", [])
-            best_by_id: dict[str, tuple[int, str]] = {}
-            for img in raw:
-                url = img.get("link", "")
-                area = img.get("width", 0) * img.get("height", 0)
-                m = _PAT_SP_IMG_ID.search(url)
-                img_id = m.group(1) if m else url
-                if img_id not in best_by_id or area > best_by_id[img_id][0]:
-                    best_by_id[img_id] = (area, url)
-            sorted_imgs = sorted(best_by_id.values(), key=lambda x: -x[0])
-            result["images"] = [url for _, url in sorted_imgs[:15]]
-
-        return result
-
+        return get_facts_for_promote(asin)
     except Exception as e:
         logger.warning(f"SP-API 상품정보 수집 실패 ({asin}): {e}")
         return {}
