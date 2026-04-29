@@ -46,3 +46,7 @@ backend/purchase/media/
 
 # 런타임 캐시 (Amazon KR 쿠키 등)
 .cache/
+
+# 코드/DB 백업 파일 (수동 작업 산출물 — 커밋 금지)
+*.bak
+*.bak.*
