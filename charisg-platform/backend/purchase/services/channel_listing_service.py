@@ -38,6 +38,20 @@ def send_to_channels(product_id: int, channels: list[str] | None = None) -> dict
     if cost_usd is None or cost_usd == "":
         raise ValueError(f"product {product_id}: cost_usd 없음")
 
+    # B 안: 쿠팡 자동매칭 위임 여부 사전 판정 — primary 키워드의 keyword_category_map.source 확인
+    # source='ai_soft' (50 ≤ score < 70) 면 coupang_auto_matched=1 마킹
+    coupang_auto = 0
+    with get_db() as conn:
+        kw_row = conn.execute(
+            """SELECT m.source FROM product_keywords pk
+               JOIN keyword_category_map m ON m.keyword = pk.keyword
+               WHERE pk.product_id=? AND pk.is_primary=1
+               LIMIT 1""",
+            (product_id,),
+        ).fetchone()
+    if kw_row and kw_row["source"] == "ai_soft":
+        coupang_auto = 1
+
     results = {}
     skipped = {}
     for ch in channels:
@@ -46,13 +60,15 @@ def send_to_channels(product_id: int, channels: list[str] | None = None) -> dict
             continue
 
         pricing = calculate_sale_krw(cost_usd=float(cost_usd), channel=ch)
+        # 쿠팡 채널만 auto_matched 마킹 적용 (다른 채널은 0)
+        ch_auto = coupang_auto if ch == "coupang" else 0
 
         with get_db() as conn:
             conn.execute(
                 """INSERT INTO listings_pa
                    (product_id, channel, status, sale_krw, cost_krw_snapshot,
-                    fee_rate, net_margin_krw, category_mapped)
-                   VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
+                    fee_rate, net_margin_krw, category_mapped, coupang_auto_matched)
+                   VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(product_id, channel) DO UPDATE SET
                     status=CASE
                       WHEN listings_pa.channel_product_id IS NOT NULL
@@ -64,10 +80,12 @@ def send_to_channels(product_id: int, channels: list[str] | None = None) -> dict
                     cost_krw_snapshot=excluded.cost_krw_snapshot,
                     fee_rate=excluded.fee_rate, net_margin_krw=excluded.net_margin_krw,
                     category_mapped=excluded.category_mapped,
+                    coupang_auto_matched=excluded.coupang_auto_matched,
                     last_synced_at=CURRENT_TIMESTAMP""",
                 (product_id, ch,
                  pricing["sale_krw"], pricing["cost_krw"], pricing["fee_rate"],
-                 pricing["net_margin_krw"], product["category_path"] or ""),
+                 pricing["net_margin_krw"], product["category_path"] or "",
+                 ch_auto),
             )
 
         results[ch] = {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, DataTable, Input } from '@charisg/ui';
@@ -7,12 +7,8 @@ import { pa } from '../api/pa.js';
 const COLS = [
   { key: 'asin', label: 'ASIN', width: '110px' },
   { key: 'title', label: '상품명', wrap: true, maxWidth: '320px' },
-  { key: 'price_usd', label: '가격', sortable: true, width: '110px',
-    render: (v, row) => {
-      if (row.price_krw != null) return '₩' + Number(row.price_krw).toLocaleString();
-      if (v != null) return '$' + Number(v).toFixed(2);
-      return '—';
-    } },
+  { key: 'price_usd', label: '$', sortable: true, width: '80px',
+    render: (v) => v != null ? '$' + Number(v).toFixed(2) : '—' },
   { key: 'rating', label: '★', width: '60px',
     render: (v) => v != null ? Number(v).toFixed(1) : '—' },
   { key: 'review_count', label: '리뷰', sortable: true, width: '80px',
@@ -33,11 +29,6 @@ export default function SourcingPage() {
   const [selected, setSelected] = useState([]);
   const [sheetUrl, setSheetUrl] = useState('');
   const [importMsg, setImportMsg] = useState(null);   // {tone: 'ok'|'err', text: string}
-
-  const [promoteProgress, setPromoteProgress] = useState(null);
-  const promoteJobRef = useRef(null);
-  const pollRef = useRef(null);
-  const navigatedRef = useRef(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['pa', 'sourcing'],
@@ -76,59 +67,16 @@ export default function SourcingPage() {
     onError: (err) => setImportMsg({ tone: 'err', text: `삭제 실패: ${err?.message || ''}` }),
   });
 
-  // 폴링: promoteJobRef 에 job_id 가 있으면 2초마다 상태 조회
-  useEffect(() => {
-    const poll = async () => {
-      const jid = promoteJobRef.current;
-      if (!jid) return;
-      try {
-        const job = await pa.getPromoteJobStatus(jid);
-        const done = job.status === 'done' || job.status === 'error';
-        setPromoteProgress({
-          pct: job.pct ?? 0,
-          current: (job.processed || 0) + (job.errors || 0),
-          total: job.total || 0,
-          processed: job.processed || 0,
-          errors: job.errors || 0,
-          status: job.status,
-          phase: job.phase_message,
-          message: job.error_message,
-        });
-        if (done) {
-          promoteJobRef.current = null;
-          qc.invalidateQueries({ queryKey: ['pa', 'sourcing'] });
-          qc.invalidateQueries({ queryKey: ['pa', 'products'] });
-          if (job.status === 'done' && !navigatedRef.current) {
-            navigatedRef.current = true;
-            setTimeout(() => navigate('/products'), 1500);
-          }
-        }
-      } catch { /* 네트워크 오류 무시, 다음 폴링에서 재시도 */ }
-    };
-    pollRef.current = setInterval(poll, 2000);
-    return () => clearInterval(pollRef.current);
-  }, [qc, navigate]);
-
-  // 페이지 진입 시 실행 중인 job 자동 감지
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await pa.getCurrentPromoteJob();
-        if (res.job) {
-          promoteJobRef.current = res.job.id;
-          setPromoteProgress({
-            pct: res.job.pct ?? 0,
-            current: (res.job.processed || 0) + (res.job.errors || 0),
-            total: res.job.total || 0,
-            processed: res.job.processed || 0,
-            errors: res.job.errors || 0,
-            status: res.job.status,
-            phase: res.job.phase_message,
-          });
-        }
-      } catch { /* ignore */ }
-    })();
-  }, []);
+  const promoteMut = useMutation({
+    mutationFn: () => pa.promoteAllSourcing(),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['pa', 'sourcing'] });
+      qc.invalidateQueries({ queryKey: ['pa', 'products'] });
+      setImportMsg({ tone: 'ok', text: `${res.promoted}건 이관 완료 — 상품관리로 이동합니다` });
+      setTimeout(() => navigate('/products'), 400);
+    },
+    onError: (err) => setImportMsg({ tone: 'err', text: `이관 실패: ${err?.message || ''}` }),
+  });
 
   const total = data?.total || 0;
 
@@ -146,25 +94,11 @@ export default function SourcingPage() {
     bulkDeleteMut.mutate(selected);
   };
 
-  const startPromote = useCallback(async () => {
+  const handlePromote = () => {
     if (!total) return;
-    // 예상 시간: SP-API rate limit 0.55초/건 + 응답시간
-    const etaSec = Math.ceil(total * 0.7);
-    const etaText = etaSec < 60 ? `${etaSec}초` : `약 ${Math.ceil(etaSec / 60)}분`;
-    if (!window.confirm(`총 ${total}개를 상품관리로 이관합니다.\nSP-API 보강에 ${etaText} 정도 걸립니다. 계속하시겠습니까?`)) return;
-
-    setImportMsg(null);
-    navigatedRef.current = false;
-    setPromoteProgress({ pct: 0, current: 0, total, processed: 0, errors: 0, status: 'running', phase: '시작 중' });
-    try {
-      const res = await pa.startPromoteJob();
-      promoteJobRef.current = res.job_id;
-    } catch (e) {
-      setPromoteProgress({ pct: 0, status: 'error', message: e?.message || '이관 시작 실패' });
-    }
-  }, [total]);
-
-  const isPromoting = promoteProgress?.status === 'running' || promoteProgress?.status === 'pending';
+    if (!window.confirm(`총 ${total}개를 상품관리로 이관합니다. 계속하시겠습니까?`)) return;
+    promoteMut.mutate();
+  };
 
   return (
     <div className="space-y-6">
@@ -210,31 +144,6 @@ export default function SourcingPage() {
         </div>
       </Card>
 
-      {promoteProgress && (
-        <Card padded>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span>
-                {promoteProgress.status === 'done'
-                  ? `완료 — 성공 ${promoteProgress.processed}건, 오류 ${promoteProgress.errors}건. 상품관리로 이동합니다…`
-                  : promoteProgress.status === 'error'
-                    ? `오류: ${promoteProgress.message || '알 수 없는 오류'}`
-                    : `${promoteProgress.phase || '처리 중'} — ${promoteProgress.current}/${promoteProgress.total}`}
-              </span>
-              {promoteProgress.status !== 'running' && promoteProgress.status !== 'pending' && (
-                <Button size="sm" variant="ghost" onClick={() => setPromoteProgress(null)}>닫기</Button>
-              )}
-            </div>
-            <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-indigo-500 transition-all duration-300"
-                style={{ width: `${promoteProgress.pct ?? 0}%` }}
-              />
-            </div>
-          </div>
-        </Card>
-      )}
-
       <Card
         title={`소싱 후보 (${total})`}
         padded={false}
@@ -251,12 +160,10 @@ export default function SourcingPage() {
             <Button
               variant="pa"
               size="sm"
-              onClick={startPromote}
-              disabled={!total || isPromoting}
+              onClick={handlePromote}
+              disabled={!total || promoteMut.isPending}
             >
-              {isPromoting
-                ? `이관 중… ${promoteProgress?.pct ?? 0}%`
-                : '상품관리로 전체 이관'}
+              {promoteMut.isPending ? '이관 중...' : '상품관리로 전체 이관'}
             </Button>
           </div>
         }

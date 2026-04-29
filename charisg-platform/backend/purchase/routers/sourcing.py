@@ -128,3 +128,58 @@ def promote_all_status(job_id: str, user: dict = Depends(current_user)):
     if not job:
         raise HTTPException(404, "이관 job 없음")
     return {**job, "pct": _pct(job)}
+
+
+# ── 시트 큐 자동 파이프라인 (대량 import) ────────────────────
+
+class QueueAddBody(BaseModel):
+    sheets: list[dict]  # [{"url": "...", "label": "..."}, ...]
+
+
+@router.post("/queue")
+def queue_add(body: QueueAddBody, user: dict = Depends(current_user)):
+    """시트 URL 리스트를 큐에 추가. 워커가 순차 자동 처리."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    added = 0
+    with get_db() as conn:
+        for sheet in body.sheets:
+            url = (sheet.get("url") or "").strip()
+            if not url:
+                continue
+            label = (sheet.get("label") or "").strip()[:100]
+            conn.execute(
+                """INSERT INTO sheet_queue (sheet_url, sheet_label, queued_at)
+                   VALUES (?, ?, ?)""",
+                (url, label or None, now),
+            )
+            added += 1
+    return {"added": added}
+
+
+@router.get("/queue")
+def queue_list(user: dict = Depends(current_user)):
+    """큐 전체 조회 — 진행 중 + 완료 + 에러 모두."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM sheet_queue ORDER BY queued_at DESC LIMIT 100"""
+        ).fetchall()
+    return {"items": [dict(r) for r in rows]}
+
+
+@router.delete("/queue/{queue_id}")
+def queue_cancel(queue_id: int, user: dict = Depends(current_user)):
+    """queued 상태만 취소 가능. 진행 중인 시트는 취소 불가."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status FROM sheet_queue WHERE id=?", (queue_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "큐 항목 없음")
+        if row["status"] != "queued":
+            raise HTTPException(400, f"queued 상태만 취소 가능 (현재: {row['status']})")
+        conn.execute(
+            "UPDATE sheet_queue SET status='cancelled', finished_at=datetime('now') WHERE id=?",
+            (queue_id,),
+        )
+    return {"ok": True}
