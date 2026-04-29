@@ -6,6 +6,7 @@ products → 네이버 커머스 API 페이로드 변환 → 등록.
 
 등록 전 완성 파이프라인: 상품명+이미지+속성+태그+브랜드를 모두 포함한 페이로드로 1회 등록.
 """
+import hashlib
 import json
 import logging
 import re
@@ -25,8 +26,13 @@ _SPECIAL_CHAR_MAP = {
 _SPECIAL_RE = re.compile('[' + re.escape(''.join(_SPECIAL_CHAR_MAP.keys())) + ']')
 
 
+_BRAND_PLACEHOLDER_RE = re.compile(r'\[\s*브랜드[^\]]*\]\s*')
+
+
 def _clean_product_name(name: str) -> str:
-    """네이버 금지 특수문자 치환 + 50자 제한."""
+    """네이버 금지 특수문자 치환 + [브랜드명] placeholder 제거 + 50자 제한."""
+    # AI 가 출력한 [브랜드명], [브랜드명 미포함] 같은 placeholder 제거
+    name = _BRAND_PLACEHOLDER_RE.sub('', name or '')
     def _replace(m):
         return _SPECIAL_CHAR_MAP.get(m.group(0), ' ')
     cleaned = _SPECIAL_RE.sub(_replace, name)
@@ -45,8 +51,14 @@ def _extract_brand(name: str) -> str:
     return "해외 브랜드"
 
 
+_TAG_DISALLOWED_RE = re.compile(r'[^가-힣A-Za-z0-9]')
+
+
 def _build_seller_tags(seo_tags_json: str) -> list[dict]:
-    """DB의 seo_tags JSON → 네이버 sellerTags 배열."""
+    """DB의 seo_tags JSON → 네이버 sellerTags 배열.
+
+    네이버 제약: 한글·영숫자 외 문자 금지, 30byte(UTF-8) 이하, 최대 10개.
+    """
     try:
         tags = json.loads(seo_tags_json) if seo_tags_json else []
     except (json.JSONDecodeError, TypeError):
@@ -55,7 +67,11 @@ def _build_seller_tags(seo_tags_json: str) -> list[dict]:
         return []
     valid = []
     for t in tags:
-        t = t.strip().replace(" ", "")[:20]
+        if not isinstance(t, str):
+            continue
+        t = _TAG_DISALLOWED_RE.sub('', t.strip())
+        while t and len(t.encode('utf-8')) > 30:
+            t = t[:-1]
         if t and len(t) >= 2:
             valid.append({"text": t})
     return valid[:10]
@@ -86,33 +102,132 @@ def _upload_one_image_with_retry(local_path: str, retries: int = 3) -> Optional[
     return None
 
 
+def _compute_sha256(file_path: str) -> Optional[str]:
+    """파일 SHA256 해시. 읽기 실패/빈 파일 시 None."""
+    try:
+        h = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception as e:
+        logger.warning(f"SHA256 계산 실패 {file_path}: {e}")
+        return None
+
+
 def _get_product_images(product_id: int) -> list[str]:
-    """로컬 이미지를 배치 업로드 (1회 API 호출로 최대 10장). 실패 시 개별 폴백."""
+    """로컬 이미지를 네이버에 업로드. SHA256 + CDN URL 캐시로 재업로드 회피.
+
+    흐름:
+      1) image_cache 에서 product 이미지 10장 조회 (sha256, naver_cdn_url 포함)
+      2) 각 이미지에 대해
+         a. 자기 row 에 naver_cdn_url 있음 → 즉시 재사용
+         b. 같은 sha256 의 다른 row 에 naver_cdn_url 있음 → 재사용 + 현재 row 에 저장
+         c. 캐시 miss → 업로드 대상에 추가
+      3) 업로드 대상만 배치 업로드 후 DB 저장
+      4) image_idx 순으로 URL 리스트 반환
+    """
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT local_path FROM image_cache WHERE product_id=? ORDER BY image_idx",
+            """SELECT id, local_path, image_idx, sha256, naver_cdn_url
+               FROM image_cache WHERE product_id=? ORDER BY image_idx LIMIT 10""",
             (product_id,),
         ).fetchall()
     if not rows:
         return []
 
-    paths = [r["local_path"] for r in rows[:10]]
+    resolved: list[tuple[int, str]] = []  # (image_idx, url)
+    upload_targets: list[tuple[int, int, str]] = []  # (cache_id, image_idx, local_path)
+    cache_hits = 0
 
-    # 배치 업로드 시도 (1회 API 호출)
-    results = upload_images_batch(paths)
-    naver_urls = [url for url in results if url]
+    with get_db() as conn:
+        for r in rows:
+            cache_id, idx, path, sha, cdn_url = r["id"], r["image_idx"], r["local_path"], r["sha256"], r["naver_cdn_url"]
 
-    if naver_urls:
-        return naver_urls
+            # (a) 이 row 에 이미 네이버 CDN URL 저장됨
+            if cdn_url:
+                resolved.append((idx, cdn_url))
+                cache_hits += 1
+                continue
 
-    # 배치 실패 시 대표이미지만 개별 재시도
-    url = _upload_one_image_with_retry(paths[0])
-    if url:
-        logger.warning(f"[smartstore] product {product_id} 배치 실패 → 대표이미지 개별 업로드 성공")
-        return [url]
+            # sha256 없으면 계산 후 저장
+            if not sha:
+                sha = _compute_sha256(path)
+                if sha:
+                    conn.execute("UPDATE image_cache SET sha256=? WHERE id=?", (sha, cache_id))
+                else:
+                    upload_targets.append((cache_id, idx, path))
+                    continue
 
-    logger.error(f"[smartstore] product {product_id} 대표이미지 업로드 실패")
-    return []
+            # (b) 다른 상품의 같은 이미지가 이미 네이버에 업로드됨 → URL 재사용
+            cached = conn.execute(
+                "SELECT naver_cdn_url FROM image_cache WHERE sha256=? AND naver_cdn_url IS NOT NULL LIMIT 1",
+                (sha,),
+            ).fetchone()
+            if cached and cached["naver_cdn_url"]:
+                reused_url = cached["naver_cdn_url"]
+                resolved.append((idx, reused_url))
+                conn.execute(
+                    "UPDATE image_cache SET naver_cdn_url=?, naver_uploaded_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (reused_url, cache_id),
+                )
+                cache_hits += 1
+                continue
+
+            # (c) 캐시 miss
+            upload_targets.append((cache_id, idx, path))
+
+    # 업로드 대상이 있으면 배치 업로드
+    if upload_targets:
+        paths = [t[2] for t in upload_targets]
+        results = upload_images_batch(paths)
+        success_count = sum(1 for u in results if u)
+
+        with get_db() as conn:
+            # 해시도 아직 없는 행이 있을 수 있으니 각 성공 row 에 sha256 + URL 저장
+            for (cache_id, idx, path), url in zip(upload_targets, results):
+                if url:
+                    resolved.append((idx, url))
+                    sha = _compute_sha256(path)
+                    if sha:
+                        conn.execute(
+                            "UPDATE image_cache SET sha256=?, naver_cdn_url=?, naver_uploaded_at=CURRENT_TIMESTAMP WHERE id=?",
+                            (sha, url, cache_id),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE image_cache SET naver_cdn_url=?, naver_uploaded_at=CURRENT_TIMESTAMP WHERE id=?",
+                            (url, cache_id),
+                        )
+
+        # 배치 전체 실패 시 대표이미지만 개별 폴백
+        if success_count == 0:
+            first_id, first_idx, first_path = upload_targets[0]
+            url = _upload_one_image_with_retry(first_path)
+            if url:
+                resolved.append((first_idx, url))
+                with get_db() as conn:
+                    sha = _compute_sha256(first_path)
+                    conn.execute(
+                        "UPDATE image_cache SET sha256=COALESCE(sha256,?), naver_cdn_url=?, naver_uploaded_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (sha, url, first_id),
+                    )
+                logger.warning(f"[smartstore] product {product_id} 배치 실패 → 대표이미지 개별 업로드 성공")
+
+    logger.info(
+        f"[smartstore] product {product_id} 이미지 처리: "
+        f"캐시 {cache_hits}/{len(rows)}, 업로드 {len(resolved) - cache_hits}/{len(upload_targets)}"
+    )
+
+    if not resolved:
+        logger.error(f"[smartstore] product {product_id} 대표이미지 업로드 실패")
+        return []
+
+    resolved.sort(key=lambda x: x[0])
+    return [url for _, url in resolved]
 
 
 def preupload_images(product_id: int) -> list[str]:
@@ -190,11 +305,19 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
     seller_tags = _build_seller_tags(seo_tags)
 
     # ── 속성 (productAttributes) ──
+    # naver_attributes_json: list[{attributeSeq, attributeValueSeq}]
     product_attributes = []
-    inferred_json = p["inferred_attributes_json"] if "inferred_attributes_json" in p.keys() else None
-    if inferred_json:
+    naver_json = p["naver_attributes_json"] if "naver_attributes_json" in p.keys() else None
+    if naver_json:
         try:
-            product_attributes = json.loads(inferred_json)
+            parsed = json.loads(naver_json)
+            if isinstance(parsed, list):
+                product_attributes = [
+                    a for a in parsed
+                    if isinstance(a, dict)
+                    and a.get("attributeSeq")
+                    and a.get("attributeValueSeq")
+                ]
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -211,13 +334,22 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
             "afterServiceGuideContent": "해외 구매대행 상품으로 국내 A/S가 불가합니다. 네이버 톡톡 또는 1:1 문의를 이용해주세요.",
         },
         "originAreaInfo": {
-            "originAreaCode": "0204000",
-            "content": "미국산(Charis G)",
+            "originAreaCode": "03",
+            "content": "상세페이지 참고",
             "importer": "Charis G",
         },
         "taxType": "TAX",
         "minorPurchasable": True,
         "customsTaxType": "EXCLUDED",
+        # 인증 면제 — 해외 구매대행 (어린이제품/KC/친환경 카테고리 등록 시 필수)
+        # 2026-04-28 추가: 어린이제품 인증대상/KC 인증대상 카테고리 187건 거부 fix.
+        # commerce-api Discussion #704 기반 페이로드.
+        "certificationTargetExcludeContent": {
+            "childCertifiedProductExclusionYn": True,
+            "kcCertifiedProductExclusionYn": "KC_EXEMPTION_OBJECT",
+            "kcExemptionType": "OVERSEAS",
+            "greenCertifiedProductExclusionYn": True,
+        },
         "productInfoProvidedNotice": {
             "productInfoProvidedNoticeType": "ETC",
             "etc": {
@@ -290,10 +422,37 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
 
     payload = build_payload(product_id, image_urls=image_urls)
     if not payload:
-        return {"ok": False, "error": f"product {product_id}: 페이로드 생성 실패 (검증 오류 또는 상품 없음)"}
+        err = f"payload build 실패 (검증 오류 또는 상품 없음)"
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE listings_pa SET status='excluded', error_message=?,
+                   last_synced_at=CURRENT_TIMESTAMP
+                   WHERE product_id=? AND channel='smartstore'""",
+                (err, product_id),
+            )
+        return {"ok": False, "error": err}
     result = register_product(payload)
     if not result:
-        return {"ok": False, "error": "naver api 호출 실패"}
+        err = "naver api 호출 실패 (응답 없음)"
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE listings_pa SET status='excluded', error_message=?,
+                   last_synced_at=CURRENT_TIMESTAMP
+                   WHERE product_id=? AND channel='smartstore'""",
+                (err, product_id),
+            )
+        return {"ok": False, "error": err}
+
+    if result.get("_error"):
+        err = result["_error"]
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE listings_pa SET status='excluded', error_message=?,
+                   last_synced_at=CURRENT_TIMESTAMP
+                   WHERE product_id=? AND channel='smartstore'""",
+                (err, product_id),
+            )
+        return {"ok": False, "error": err}
 
     if result.get("_skip"):
         with get_db() as conn:

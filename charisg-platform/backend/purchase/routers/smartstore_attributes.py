@@ -171,10 +171,12 @@ async def infer_attributes(product_id: int, user: dict = Depends(current_user)):
     title = row["title_ko"] or row["title_en"] or ""
     desc = row["description_ko"] or row["description_en"] or ""
 
-    # 속성 목록 + 값 가져오기
+    # 속성 목록 + 값 가져오기. RANGE 타입은 attributeRealValue 필수 → 제외.
     attrs_meta = _naver_get_attributes(category_id)
     attrs_with_values = []
     for attr in attrs_meta:
+        if attr.get("attributeClassificationType") == "RANGE":
+            continue
         values = _naver_get_attribute_values(attr["attributeSeq"], category_id)
         # minAttributeValue가 없거나 list인 경우 필터링
         safe_values = [
@@ -384,12 +386,18 @@ _ATTRS_META_CACHE: dict[str, list[dict]] = {}
 
 
 def _get_attrs_with_values(category_id: str) -> list[dict]:
-    """카테고리별 속성 + 값 목록 (캐시). Gemini 프롬프트 구성에 재사용."""
+    """카테고리별 속성 + 값 목록 (캐시). Gemini 프롬프트 구성에 재사용.
+
+    RANGE 타입은 attributeRealValue(실수치) 를 요구하므로 제외.
+    네이버는 SINGLE_SELECT/MULTI_SELECT 만 attributeValueSeq 매핑으로 등록 가능.
+    """
     if category_id in _ATTRS_META_CACHE:
         return _ATTRS_META_CACHE[category_id]
     attrs_meta = _naver_get_attributes(category_id)
     result = []
     for attr in attrs_meta:
+        if attr.get("attributeClassificationType") == "RANGE":
+            continue
         values = _naver_get_attribute_values(attr["attributeSeq"], category_id)
         safe_values = [
             v for v in values
@@ -479,7 +487,12 @@ JSON으로 응답 (각 상품별):
 def _map_ai_to_attrs(
     ai_selections: list[dict], attrs_with_values: list[dict]
 ) -> list[dict]:
-    """AI 선택을 attributeSeq/ValueSeq 쌍으로 매핑."""
+    """AI 선택을 attributeSeq/ValueSeq 쌍으로 매핑.
+
+    attributeRealValue 도 함께 채움 — 일부 카테고리 속성은 SELECT 옵션 외에
+    자유 텍스트값도 mandatory (예: 어린이제품, KC 카테고리). 옵션 매칭된
+    텍스트(matched_value_name) 를 attributeRealValue 로 사용.
+    """
     mapped = []
     for attr_info in attrs_with_values:
         ai_match = next((s for s in ai_selections if s.get("name") == attr_info["name"]), None)
@@ -489,13 +502,19 @@ def _map_ai_to_attrs(
         if selected_name and not isinstance(selected_name, str):
             selected_name = str(selected_name)
         selected_seq = attr_info["values_map"].get(selected_name) if selected_name else None
+        matched_value_name = selected_name if selected_seq else None
         if not selected_seq and selected_name:
             for vname, vseq in attr_info["values_map"].items():
                 if selected_name in vname or vname in selected_name:
                     selected_seq = vseq
+                    matched_value_name = vname
                     break
         if selected_seq:
-            mapped.append({"attributeSeq": attr_info["seq"], "attributeValueSeq": selected_seq})
+            mapped.append({
+                "attributeSeq": attr_info["seq"],
+                "attributeValueSeq": selected_seq,
+                "attributeRealValue": matched_value_name or "",
+            })
     return mapped
 
 

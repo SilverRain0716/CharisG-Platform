@@ -3,6 +3,20 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, DataTable, StatusBadge } from '@charisg/ui';
 import { pa } from '../api/pa.js';
 
+/**
+ * batch_jobs.phase 코드 → UI 메타.
+ * - label: 배지에 표기될 단계명
+ * - badge: tailwind 클래스 (배지 배경/텍스트)
+ * - bar:   진행바 색상 (Phase 1·1.5는 처리 카운터가 0이라 폭이 0이지만, 단계 진입 자체를
+ *          가시화하기 위해 보조용으로 사용)
+ */
+const PHASE_META = {
+  phase_1:   { label: '1단계 · 이미지 업로드',  badge: 'bg-blue-100 text-blue-700',     bar: 'bg-blue-500' },
+  phase_1_5: { label: '1.5단계 · 속성 추론',    badge: 'bg-violet-100 text-violet-700', bar: 'bg-violet-500' },
+  phase_2:   { label: '2단계 · 상품 등록',      badge: 'bg-emerald-100 text-emerald-700', bar: 'bg-emerald-500' },
+  done:      { label: '완료',                   badge: 'bg-ink-100 text-ink-700',       bar: 'bg-ink-400' },
+};
+
 const COLS = [
   { key: 'product_id', label: 'ID', width: '60px' },
   { key: 'title_ko', label: '상품명', wrap: true, maxWidth: '300px',
@@ -360,6 +374,7 @@ export default function SmartStorePage() {
           total: job.total, status: job.status,
           message: job.error_message,
           phaseMessage: job.phase_message,
+          phase: job.phase,
         });
         if (done) {
           jobIdRef.current = null;
@@ -381,6 +396,7 @@ export default function SmartStorePage() {
             pct: res.job.pct ?? 0, processed: res.job.processed, errors: res.job.errors,
             total: res.job.total, status: res.job.status,
             phaseMessage: res.job.phase_message,
+            phase: res.job.phase,
           });
         }
       } catch {}
@@ -459,33 +475,49 @@ export default function SmartStorePage() {
         )}
       </header>
 
-      {uploadProgress && (
-        <Card padded>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span>
-                {uploadProgress.status === 'done'
-                  ? `업로드 완료 — 성공 ${uploadProgress.processed}건, 실패 ${uploadProgress.errors}건`
-                  : uploadProgress.status === 'error'
-                    ? `오류: ${uploadProgress.message || '알 수 없는 오류'}`
-                    : `업로드 중 ${uploadProgress.processed + uploadProgress.errors}/${uploadProgress.total}`}
-              </span>
-              {uploadProgress.status !== 'running' && (
-                <Button size="sm" variant="ghost" onClick={() => setUploadProgress(null)}>닫기</Button>
+      {uploadProgress && (() => {
+        const meta = PHASE_META[uploadProgress.phase] || null;
+        // Phase 1·1.5 동안에는 processed 카운터가 0이라 pct=0이 된다.
+        // 단계 진입 자체를 시각화하기 위해 사전 단계에 최소 폭을 부여한다.
+        const PHASE_FLOOR = { phase_1: 5, phase_1_5: 35, phase_2: 65, done: 100 };
+        const floor = PHASE_FLOOR[uploadProgress.phase] ?? 0;
+        const pct = Math.max(uploadProgress.pct ?? 0, floor);
+        const barClass = meta?.bar || 'bg-green-500';
+        return (
+          <Card padded>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <div className="flex items-center gap-2">
+                  {meta && (
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${meta.badge}`}>
+                      {meta.label}
+                    </span>
+                  )}
+                  <span>
+                    {uploadProgress.status === 'done'
+                      ? `업로드 완료 — 성공 ${uploadProgress.processed}건, 실패 ${uploadProgress.errors}건`
+                      : uploadProgress.status === 'error'
+                        ? `오류: ${uploadProgress.message || '알 수 없는 오류'}`
+                        : `업로드 중 ${uploadProgress.processed + uploadProgress.errors}/${uploadProgress.total}`}
+                  </span>
+                </div>
+                {uploadProgress.status !== 'running' && (
+                  <Button size="sm" variant="ghost" onClick={() => setUploadProgress(null)}>닫기</Button>
+                )}
+              </div>
+              <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${barClass}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              {uploadProgress.phaseMessage && (
+                <p className="text-xs text-ink-500">{uploadProgress.phaseMessage}</p>
               )}
             </div>
-            <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-green-500 transition-all duration-300"
-                style={{ width: `${uploadProgress.pct ?? 0}%` }}
-              />
-            </div>
-            {uploadProgress.phaseMessage && (
-              <p className="text-xs text-ink-500">{uploadProgress.phaseMessage}</p>
-            )}
-          </div>
-        </Card>
-      )}
+          </Card>
+        );
+      })()}
 
       {previewHtml && (
         <Card title="상세페이지 프리뷰" padded>
