@@ -57,6 +57,18 @@ def get_category_meta(display_category_code: str) -> Optional[dict]:
         return None
 
 
+def get_required_attributes(display_category_code: str) -> list[dict]:
+    """카테고리의 required=True attribute list 만 반환.
+
+    각 attribute: {"attributeTypeName", "dataType", "required", "basicUnits"(ENUM 값들)}
+    """
+    meta = get_category_meta(display_category_code)
+    if not meta:
+        return []
+    attrs = meta.get("attributes") or []
+    return [a for a in attrs if isinstance(a, dict) and a.get("required") is True]
+
+
 def extract_notice_category_names(meta: dict) -> list[str]:
     """카테고리고시(noticeCategoryName) 목록 추출."""
     notices = meta.get("noticeCategories") or meta.get("notices") or []
