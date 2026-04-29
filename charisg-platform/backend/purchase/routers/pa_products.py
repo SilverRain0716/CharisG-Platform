@@ -293,3 +293,72 @@ def prepare_coupang_category_status(job_id: str, user: dict = Depends(current_us
     if not job:
         raise HTTPException(404, "job 없음")
     return {**job, "pct": _pct(job)}
+
+
+# ── 키워드 N:M 매핑 (옵션 3) ───────────────────────────────────────
+
+class KeywordBody(BaseModel):
+    keyword: str
+    is_primary: bool = False
+
+
+@router.get("/{pid}/keywords")
+def list_product_keywords(pid: int, user: dict = Depends(current_user)):
+    """상품의 키워드 매핑 리스트."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT keyword, is_primary, source_sourcing_id, added_at
+               FROM product_keywords
+               WHERE product_id=?
+               ORDER BY is_primary DESC, added_at""",
+            (pid,),
+        ).fetchall()
+    return {"items": [dict(r) for r in rows]}
+
+
+@router.post("/{pid}/keywords")
+def add_product_keyword(
+    pid: int, body: KeywordBody, user: dict = Depends(current_user),
+):
+    """상품에 키워드 추가. UNIQUE(product_id, keyword) 위반 시 409."""
+    keyword = body.keyword.strip().lower()
+    if not keyword:
+        raise HTTPException(400, "keyword 필요")
+    with get_db() as conn:
+        # 상품 존재 확인
+        prod = conn.execute("SELECT id FROM products WHERE id=?", (pid,)).fetchone()
+        if not prod:
+            raise HTTPException(404, "상품 없음")
+        try:
+            conn.execute(
+                """INSERT INTO product_keywords (product_id, keyword, is_primary)
+                   VALUES (?, ?, ?)""",
+                (pid, keyword, 1 if body.is_primary else 0),
+            )
+        except Exception as e:
+            if "UNIQUE" in str(e):
+                raise HTTPException(409, "이미 매핑된 키워드")
+            raise
+    return {"ok": True}
+
+
+@router.delete("/{pid}/keywords/{keyword}")
+def remove_product_keyword(
+    pid: int, keyword: str, user: dict = Depends(current_user),
+):
+    """키워드 매핑 삭제. is_primary=1 은 보호 (원본 키워드 유지)."""
+    keyword_norm = keyword.strip().lower()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT is_primary FROM product_keywords WHERE product_id=? AND keyword=?",
+            (pid, keyword_norm),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "매핑 없음")
+        if row["is_primary"]:
+            raise HTTPException(400, "원본 키워드(is_primary=1)는 삭제 불가")
+        conn.execute(
+            "DELETE FROM product_keywords WHERE product_id=? AND keyword=?",
+            (pid, keyword_norm),
+        )
+    return {"ok": True}

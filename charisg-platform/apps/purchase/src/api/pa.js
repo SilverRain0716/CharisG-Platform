@@ -27,9 +27,7 @@ export const pa = {
   },
   importSheet:          (sheet_url) => apiFetch('/api/pa/sourcing/import-sheet', { method: 'POST', body: { sheet_url } }),
   bulkDeleteCandidates: (ids) => apiFetch('/api/pa/sourcing/bulk-delete', { method: 'POST', body: { ids } }),
-  startPromoteJob:      () => apiFetch('/api/pa/sourcing/promote-all', { method: 'POST', body: {} }),
-  getPromoteJobStatus:  (jobId) => apiFetch(`/api/pa/sourcing/promote-all/${jobId}`),
-  getCurrentPromoteJob: () => apiFetch('/api/pa/sourcing/promote-all'),
+  promoteAllSourcing:   () => apiFetch('/api/pa/sourcing/promote-all', { method: 'POST', body: {} }),
 
   // Customs
   customsQuick:   (req) => apiFetch('/api/pa/customs/quick', { method: 'POST', body: req }),
@@ -43,14 +41,6 @@ export const pa = {
   product:        (id) => apiFetch(`/api/pa/products/${id}`),
   setProductStatus: (id, status) => apiFetch(`/api/pa/products/${id}/status`, { method: 'PATCH', body: { status } }),
   bulkDeleteProducts: (body) => apiFetch('/api/pa/products/bulk-delete', { method: 'POST', body }),
-
-  // Channel prepare (category mapping)
-  startNaverCategoryMap:   () => apiFetch('/api/pa/products/prepare-naver-category', { method: 'POST', body: {} }),
-  naverCategoryJobStatus:  (jobId) => apiFetch(`/api/pa/products/prepare-naver-category/${jobId}`),
-  currentNaverCategoryJob: () => apiFetch('/api/pa/products/prepare-naver-category'),
-  startCoupangCategoryMap:   () => apiFetch('/api/pa/products/prepare-coupang-category', { method: 'POST', body: {} }),
-  coupangCategoryJobStatus:  (jobId) => apiFetch(`/api/pa/products/prepare-coupang-category/${jobId}`),
-  currentCoupangCategoryJob: () => apiFetch('/api/pa/products/prepare-coupang-category'),
 
   // Detail page
   generateDetail: (pid) => apiFetch(`/api/pa/detail-page/${pid}/generate`, { method: 'POST' }),
@@ -75,10 +65,32 @@ export const pa = {
   coupangUploadJob:          () => apiFetch('/api/pa/coupang/upload-job'),
   coupangUploadStatus:       (jobId) => apiFetch(`/api/pa/coupang/upload-all/${jobId}`),
 
-  // Coupang approval request (saveV2 → requests/approval)
-  startCoupangApproval:      () => apiFetch('/api/pa/coupang/request-approval-all', { method: 'POST', body: {} }),
-  coupangApprovalJobStatus:  (jobId) => apiFetch(`/api/pa/coupang/request-approval-all/${jobId}`),
-  currentCoupangApprovalJob: () => apiFetch('/api/pa/coupang/request-approval-all'),
+  // Coupang 속성 보정 (MANDATORY 누락 excluded 복구)
+  coupangExcluded:           () => apiFetch('/api/pa/coupang/excluded'),
+  coupangSaveAttrsBulk:      (items) => apiFetch('/api/pa/coupang/attributes/bulk', { method: 'POST', body: { items } }),
+  coupangRestorePending:     (productIds) => apiFetch('/api/pa/coupang/restore-pending', { method: 'POST', body: { product_ids: productIds } }),
+  coupangReextractStrict:    (body) => apiFetch('/api/pa/coupang/reextract-strict', { method: 'POST', body }),
+  coupangReextractStatus:    (jobId) => apiFetch(`/api/pa/coupang/reextract-strict/${jobId}`),
+
+  // Category mapping (Fix 1-D)
+  categoryMappings: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/category-map${q ? '?' + q : ''}`);
+  },
+  createCategoryMapping: (body) => apiFetch('/api/pa/category-map', { method: 'POST', body }),
+  updateCategoryMapping: (id, body) => apiFetch(`/api/pa/category-map/${id}`, { method: 'PUT', body }),
+  deleteCategoryMapping: (id) => apiFetch(`/api/pa/category-map/${id}`, { method: 'DELETE' }),
+  lookupCategoryMapping: (body) => apiFetch('/api/pa/category-map/lookup', { method: 'POST', body }),
+  categoryReviews: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/category-review${q ? '?' + q : ''}`);
+  },
+  approveCategoryReview: (id, body) => apiFetch(`/api/pa/category-review/${id}/approve`, { method: 'PUT', body }),
+  rejectCategoryReview: (id, body) => apiFetch(`/api/pa/category-review/${id}/reject`, { method: 'PUT', body }),
+  searchNaverCategory: (q, limit = 20) =>
+    apiFetch(`/api/pa/category-map/search-naver?q=${encodeURIComponent(q)}&limit=${limit}`),
+  searchCoupangCategory: (q, limit = 20) =>
+    apiFetch(`/api/pa/category-map/search-coupang?q=${encodeURIComponent(q)}&limit=${limit}`),
 
   // Orders
   ordersKanban:   () => apiFetch('/api/pa/orders/kanban'),
@@ -89,6 +101,30 @@ export const pa = {
   order:          (id) => apiFetch(`/api/pa/orders/${id}`),
   advance:        (id, step, note) => apiFetch(`/api/pa/orders/${id}/advance`, { method: 'PATCH', body: { step, note } }),
   tracking:       (id) => apiFetch(`/api/pa/tracking/${id}`),
+  orderAmazonPrep: (oid) => apiFetch(`/api/pa/orders/${oid}/amazon-prep`),
+  translateOrder:  (oid) => apiFetch(`/api/pa/orders/${oid}/translate`, { method: 'POST' }),
+  setAmazonOrder:  (oid, body) => apiFetch(`/api/pa/orders/${oid}/amazon-order`, { method: 'PATCH', body }),
+  releaseAddress:        () => apiFetch('/api/pa/settings/release-address'),
+  refreshReleaseAddress: () => apiFetch('/api/pa/settings/release-address/refresh', { method: 'POST' }),
+
+  // Groups (variation 통합 등록)
+  groupsList:  (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/groups${q ? '?' + q : ''}`);
+  },
+  groupsStats: (channel = 'coupang') => apiFetch(`/api/pa/groups/stats?channel=${channel}`),
+  groupGet:    (parent_asin, channel = 'coupang') => apiFetch(`/api/pa/groups/${parent_asin}?channel=${channel}`),
+  groupSaveRule: (parent_asin, body) => apiFetch(`/api/pa/groups/${parent_asin}/save-rule`, { method: 'POST', body }),
+  groupPayload: (parent_asin, channel = 'smartstore', split_index = 0) =>
+    apiFetch(`/api/pa/groups/${parent_asin}/payload?channel=${channel}&split_index=${split_index}`),
+  groupExtend:  (parent_asin, body) =>
+    apiFetch(`/api/pa/groups/${parent_asin}/extend`, { method: 'POST', body }),
+  groupBackfillChildren: (parent_asin) =>
+    apiFetch(`/api/pa/groups/${parent_asin}/backfill-children`, { method: 'POST' }),
+  groupBackfillStatus: (job_id) =>
+    apiFetch(`/api/pa/groups/backfill/${job_id}`),
+  groupBackfillActive: (parent_asin) =>
+    apiFetch(`/api/pa/groups/${parent_asin}/backfill/active`),
 
   // CS
   cs:             (status) => apiFetch(`/api/pa/cs${status ? '?status=' + status : ''}`),

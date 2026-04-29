@@ -2,6 +2,19 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, DataTable, StatusBadge } from '@charisg/ui';
 import { pa } from '../api/pa.js';
+import GroupsPage from './GroupsPage.jsx';
+
+// phase_message 가 JSON 형태 ({stage, s1, s2}) 면 파싱, 아니면 null
+function parsePhaseMessage(msg) {
+  if (!msg) return null;
+  try {
+    const parsed = JSON.parse(msg);
+    if (parsed && typeof parsed === 'object' && parsed.s1 && parsed.s2) {
+      return parsed;
+    }
+  } catch { /* not JSON */ }
+  return null;
+}
 
 function InlinePrice({ row, onSave }) {
   const [editing, setEditing] = useState(false);
@@ -44,7 +57,11 @@ const COLS = [
   { key: 'id', label: 'ID', width: '60px' },
   { key: 'title_ko', label: '상품명', wrap: true, maxWidth: '360px',
     render: (v, row) => v || <span className="text-ink-400">{row.title_en || '—'}</span> },
-  { key: 'seo_title', label: 'SEO 제목', wrap: true, maxWidth: '200px',
+  { key: 'category_path', label: '카테고리', wrap: true, maxWidth: '120px',
+    render: (v) => v
+      ? <span className="font-mono text-xs text-ink-700">{v}</span>
+      : <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-xs">검토 필요</span> },
+  { key: 'seo_title', label: 'SEO 제목', wrap: true, maxWidth: '180px',
     render: (v) => v || <span className="text-ink-300">—</span> },
   { key: 'margin_pct', label: '마진%', sortable: true, width: '80px',
     render: (v) => v != null ? Number(v).toFixed(1) + '%' : '—' },
@@ -57,6 +74,7 @@ const COLS = [
 
 export default function ProductManagementPage() {
   const qc = useQueryClient();
+  const [tab, setTab] = useState('single'); // 'single' | 'group'
   const [showAll, setShowAll] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ['pa', 'products', showAll ? 'all' : 'unchanneled'],
@@ -64,91 +82,58 @@ export default function ProductManagementPage() {
   });
 
   const [batchProgress, setBatchProgress] = useState(null);
-  const [naverProgress, setNaverProgress] = useState(null);
-  const [coupangProgress, setCoupangProgress] = useState(null);
   const [generatingId, setGeneratingId] = useState(null);
   const [previewHtml, setPreviewHtml] = useState(null);
   const jobIdRef = useRef(null);
-  const naverJobIdRef = useRef(null);
-  const coupangJobIdRef = useRef(null);
   const pollRef = useRef(null);
 
-  const _jobToProgress = (job) => ({
-    pct: job.pct ?? 0,
-    current: (job.processed || 0) + (job.errors || 0),
-    total: job.total || 0,
-    processed: job.processed || 0,
-    errors: job.errors || 0,
-    status: job.status,
-    phase: job.phase_message,
-    message: job.error_message,
-  });
-
-  // 폴링: 3개 job 모두 2초마다 상태 조회
+  // 폴링: jobIdRef에 job_id가 있으면 2초마다 상태 조회
   useEffect(() => {
     const poll = async () => {
-      if (jobIdRef.current) {
-        try {
-          const job = await pa.getBatchJobStatus(jobIdRef.current);
-          const done = job.status === 'done' || job.status === 'error';
-          setBatchProgress(_jobToProgress(job));
-          if (done) {
-            jobIdRef.current = null;
-            qc.invalidateQueries({ queryKey: ['pa', 'products'] });
-          }
-        } catch {}
-      }
-      if (naverJobIdRef.current) {
-        try {
-          const job = await pa.naverCategoryJobStatus(naverJobIdRef.current);
-          const done = job.status === 'done' || job.status === 'error';
-          setNaverProgress(_jobToProgress(job));
-          if (done) {
-            naverJobIdRef.current = null;
-            qc.invalidateQueries({ queryKey: ['pa', 'products'] });
-          }
-        } catch {}
-      }
-      if (coupangJobIdRef.current) {
-        try {
-          const job = await pa.coupangCategoryJobStatus(coupangJobIdRef.current);
-          const done = job.status === 'done' || job.status === 'error';
-          setCoupangProgress(_jobToProgress(job));
-          if (done) {
-            coupangJobIdRef.current = null;
-            qc.invalidateQueries({ queryKey: ['pa', 'products'] });
-          }
-        } catch {}
-      }
+      const jid = jobIdRef.current;
+      if (!jid) return;
+      try {
+        const job = await pa.getBatchJobStatus(jid);
+        const done = job.status === 'done' || job.status === 'error';
+        setBatchProgress({
+          pct: job.pct ?? 0,
+          current: job.processed + job.errors,
+          total: job.total,
+          processed: job.processed,
+          errors: job.errors,
+          status: job.status,
+          message: job.error_message,
+          phase: parsePhaseMessage(job.phase_message),
+        });
+        if (done) {
+          jobIdRef.current = null;
+          qc.invalidateQueries({ queryKey: ['pa', 'products'] });
+        }
+      } catch { /* 네트워크 오류 무시, 다음 폴링에서 재시도 */ }
     };
+
     pollRef.current = setInterval(poll, 2000);
     return () => clearInterval(pollRef.current);
   }, [qc]);
 
-  // 페이지 진입 시 실행 중인 job 자동 감지 (3종)
+  // 페이지 진입 시 실행 중인 job 자동 감지
   useEffect(() => {
     (async () => {
       try {
         const res = await pa.getCurrentBatchJob();
         if (res.job) {
           jobIdRef.current = res.job.id;
-          setBatchProgress(_jobToProgress(res.job));
+          setBatchProgress({
+            pct: res.job.pct ?? 0,
+            current: res.job.processed + res.job.errors,
+            total: res.job.total,
+            processed: res.job.processed,
+            errors: res.job.errors,
+            status: res.job.status,
+            phase: parsePhaseMessage(res.job.phase_message),
+          });
         }
-      } catch {}
-      try {
-        const res = await pa.currentNaverCategoryJob();
-        if (res.job) {
-          naverJobIdRef.current = res.job.id;
-          setNaverProgress(_jobToProgress(res.job));
-        }
-      } catch {}
-      try {
-        const res = await pa.currentCoupangCategoryJob();
-        if (res.job) {
-          coupangJobIdRef.current = res.job.id;
-          setCoupangProgress(_jobToProgress(res.job));
-        }
-      } catch {}
+      } catch { /* ignore */ }
     })();
   }, []);
 
@@ -198,33 +183,9 @@ export default function ProductManagementPage() {
     }
   }, []);
 
-  const startNaverMapJob = useCallback(async () => {
-    setNaverProgress({ pct: 0, current: 0, total: 0, status: 'running', phase: '시작 중' });
-    try {
-      const res = await pa.startNaverCategoryMap();
-      naverJobIdRef.current = res.job_id;
-    } catch (e) {
-      setNaverProgress({ pct: 0, status: 'error', message: e.message || '네이버 매핑 시작 실패' });
-    }
-  }, []);
-
-  const startCoupangMapJob = useCallback(async () => {
-    setCoupangProgress({ pct: 0, current: 0, total: 0, status: 'running', phase: '시작 중' });
-    try {
-      const res = await pa.startCoupangCategoryMap();
-      coupangJobIdRef.current = res.job_id;
-    } catch (e) {
-      setCoupangProgress({ pct: 0, status: 'error', message: e.message || '쿠팡 매핑 시작 실패' });
-    }
-  }, []);
-
-  const totalCount = data?.total || 0;
-  const unprocessedCount = data?.unprocessed_count ?? data?.items?.filter((r) => !r.ai_processed_at).length ?? 0;
-  const sendableCount = data?.processed_count ?? data?.items?.filter((r) => r.ai_processed_at).length ?? 0;
-  const naverPending = data?.naver_category_pending ?? 0;
-  const coupangPending = data?.coupang_category_pending ?? 0;
-  const naverRunning = naverProgress?.status === 'running' || naverProgress?.status === 'pending';
-  const coupangRunning = coupangProgress?.status === 'running' || coupangProgress?.status === 'pending';
+  const totalCount = data?.items?.length || 0;
+  const unprocessedCount = data?.items?.filter((r) => !r.ai_processed_at).length || 0;
+  const sendableCount = data?.items?.filter((r) => r.ai_processed_at).length || 0;
 
   const [bulkSending, setBulkSending] = useState(false);
   const [bulkSendResult, setBulkSendResult] = useState(null);
@@ -249,79 +210,166 @@ export default function ProductManagementPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-ink-900">상품 관리</h1>
           <p className="mt-1 text-sm text-ink-500">
-            {showAll ? '전체 상품 (채널 발송 완료 포함)' : '채널에 아직 보내지 않은 상품만 표시.'}
+            단품과 옵션 그룹을 한 곳에서 관리.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-sm text-ink-600 cursor-pointer select-none pr-2">
-            <input
-              type="checkbox"
-              checked={showAll}
-              onChange={(e) => setShowAll(e.target.checked)}
-              className="rounded"
-            />
-            전체 상품 보기
-          </label>
-          {naverPending > 0 && (
-            <Button
-              variant="ghost"
-              disabled={naverRunning}
-              onClick={startNaverMapJob}
-              title="products.category_path(영문)를 네이버 leaf ID로 매핑"
-            >
-              {naverRunning
-                ? `네이버 매핑 중… ${naverProgress?.pct ?? 0}%`
-                : `네이버 카테고리 매핑 (${naverPending}건)`}
-            </Button>
-          )}
-          {coupangPending > 0 && (
-            <Button
-              variant="ghost"
-              disabled={coupangRunning}
-              onClick={startCoupangMapJob}
-              title="네이버 ID → 쿠팡 카테고리 코드 매핑 (채널 보내기 이후)"
-            >
-              {coupangRunning
-                ? `쿠팡 매핑 중… ${coupangProgress?.pct ?? 0}%`
-                : `쿠팡 카테고리 매핑 (${coupangPending}건)`}
-            </Button>
-          )}
-          {sendableCount > 0 && (
-            <Button
-              variant="ghost"
-              disabled={bulkSending}
-              onClick={startBulkSend}
-            >
-              {bulkSending ? '전송 중…' : `전체 채널 보내기 (${sendableCount}건)`}
-            </Button>
-          )}
-          {unprocessedCount > 0 && (
-            <Button
-              variant="pa"
-              disabled={batchProgress?.status === 'running'}
-              onClick={() => startBatchJob({ all_unprocessed: true })}
-            >
-              {batchProgress?.status === 'running'
-                ? `상세 생성 중… ${batchProgress.pct ?? 0}%`
-                : `미처리 상세 생성 (${unprocessedCount}건)`}
-            </Button>
-          )}
-        </div>
+        {tab === 'single' && (
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 text-sm text-ink-600 cursor-pointer select-none pr-2">
+              <input
+                type="checkbox"
+                checked={showAll}
+                onChange={(e) => setShowAll(e.target.checked)}
+                className="rounded"
+              />
+              전체 상품 보기
+            </label>
+            {sendableCount > 0 && (
+              <Button
+                variant="ghost"
+                disabled={bulkSending}
+                onClick={startBulkSend}
+              >
+                {bulkSending ? '전송 중…' : `전체 채널 보내기 (${sendableCount}건)`}
+              </Button>
+            )}
+            {unprocessedCount > 0 && (
+              <Button
+                variant="pa"
+                disabled={batchProgress?.status === 'running'}
+                onClick={() => startBatchJob({ all_unprocessed: true })}
+              >
+                {batchProgress?.status === 'running'
+                  ? `상세 생성 중… ${batchProgress.pct ?? 0}%`
+                  : `미처리 상세 생성 (${unprocessedCount}건)`}
+              </Button>
+            )}
+          </div>
+        )}
       </header>
 
-      {batchProgress && (
+      {/* 탭 토글 — 단품 / 그룹 */}
+      <div className="flex gap-2 border-b border-ink-200">
+        {[
+          { id: 'single', label: '단품' },
+          { id: 'group', label: '그룹 (옵션 그룹)' },
+        ].map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
+              tab === t.id
+                ? 'border-pa-500 text-pa-600'
+                : 'border-transparent text-ink-500 hover:text-ink-700'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 그룹 탭 — GroupsPage 통째로 임베드 */}
+      {tab === 'group' && (
+        <div>
+          <GroupsPage showHeader={false} />
+        </div>
+      )}
+
+      {/* 단품 탭 컨텐츠 — group 탭 활성 시 숨김 */}
+      <div className={tab === 'group' ? 'hidden' : 'space-y-6'}>
+
+      {batchProgress && batchProgress.phase && (
+        <Card padded>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-semibold text-ink-700">
+                {batchProgress.status === 'done'
+                  ? '완료'
+                  : batchProgress.status === 'error'
+                    ? `오류: ${batchProgress.message || '알 수 없는 오류'}`
+                    : batchProgress.phase.stage === 1
+                      ? 'Stage 1 (HTML 생성) 진행 중'
+                      : batchProgress.phase.stage === 2
+                        ? 'Stage 2 (AI 번역/SEO) 진행 중'
+                        : '완료 처리 중'}
+              </span>
+              {batchProgress.status !== 'running' && (
+                <Button size="sm" variant="ghost" onClick={() => setBatchProgress(null)}>닫기</Button>
+              )}
+            </div>
+
+            {/* Stage 1 progress */}
+            {(() => {
+              const s1 = batchProgress.phase.s1;
+              const s1Done = s1.processed + s1.skipped + s1.errors;
+              const s1Pct = s1.total ? Math.round((s1Done / s1.total) * 100) : 0;
+              const s1Active = batchProgress.phase.stage === 1;
+              const s1Complete = batchProgress.phase.stage >= 2;
+              return (
+                <div>
+                  <div className="flex items-center justify-between text-xs text-ink-600 mb-1">
+                    <span>
+                      {s1Complete ? '✓ ' : ''}Stage 1 — HTML 생성
+                      <span className="text-ink-400 ml-2">
+                        {s1Done}/{s1.total} ({s1Pct}%)
+                        {s1.errors > 0 && <span className="text-rose-500 ml-1">실패 {s1.errors}</span>}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${s1Complete ? 'bg-emerald-500' : s1Active ? 'bg-indigo-500' : 'bg-ink-300'}`}
+                      style={{ width: `${s1Pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Stage 2 progress */}
+            {(() => {
+              const s2 = batchProgress.phase.s2;
+              const s2Done = s2.processed + s2.skipped + s2.errors;
+              const s2Pct = s2.total ? Math.round((s2Done / s2.total) * 100) : 0;
+              const s2Active = batchProgress.phase.stage === 2;
+              const s2Complete = batchProgress.phase.stage >= 3;
+              return (
+                <div>
+                  <div className="flex items-center justify-between text-xs text-ink-600 mb-1">
+                    <span>
+                      {s2Complete ? '✓ ' : ''}Stage 2 — AI 번역/SEO/카테고리
+                      <span className="text-ink-400 ml-2">
+                        {s2Done}/{s2.total} ({s2Pct}%)
+                        {s2.errors > 0 && <span className="text-rose-500 ml-1">실패 {s2.errors}</span>}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${s2Complete ? 'bg-emerald-500' : s2Active ? 'bg-indigo-500' : 'bg-ink-200'}`}
+                      style={{ width: `${s2Pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </Card>
+      )}
+
+      {/* 단일 stage 또는 phase JSON 없는 batch (legacy) */}
+      {batchProgress && !batchProgress.phase && (
         <Card padded>
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
               <span>
-                <span className="font-medium mr-2">[AI 상세 생성]</span>
                 {batchProgress.status === 'done'
                   ? `완료 — 성공 ${batchProgress.processed}건, 실패 ${batchProgress.errors}건`
                   : batchProgress.status === 'error'
                     ? `오류: ${batchProgress.message || '알 수 없는 오류'}`
                     : `처리 중 ${batchProgress.current}/${batchProgress.total}`}
               </span>
-              {batchProgress.status !== 'running' && batchProgress.status !== 'pending' && (
+              {batchProgress.status !== 'running' && (
                 <Button size="sm" variant="ghost" onClick={() => setBatchProgress(null)}>닫기</Button>
               )}
             </div>
@@ -329,58 +377,6 @@ export default function ProductManagementPage() {
               <div
                 className="h-full rounded-full bg-indigo-500 transition-all duration-300"
                 style={{ width: `${batchProgress.pct ?? 0}%` }}
-              />
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {naverProgress && (
-        <Card padded>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span>
-                <span className="font-medium mr-2">[네이버 카테고리 매핑]</span>
-                {naverProgress.status === 'done'
-                  ? (naverProgress.phase || `완료 — 성공 ${(naverProgress.processed || 0) - (naverProgress.errors || 0)}건, 실패 ${naverProgress.errors}건`)
-                  : naverProgress.status === 'error'
-                    ? `오류: ${naverProgress.message || '알 수 없는 오류'}`
-                    : (naverProgress.phase || `처리 중 ${naverProgress.current}/${naverProgress.total}`)}
-              </span>
-              {naverProgress.status !== 'running' && naverProgress.status !== 'pending' && (
-                <Button size="sm" variant="ghost" onClick={() => setNaverProgress(null)}>닫기</Button>
-              )}
-            </div>
-            <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-emerald-500 transition-all duration-300"
-                style={{ width: `${naverProgress.pct ?? 0}%` }}
-              />
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {coupangProgress && (
-        <Card padded>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span>
-                <span className="font-medium mr-2">[쿠팡 카테고리 매핑]</span>
-                {coupangProgress.status === 'done'
-                  ? (coupangProgress.phase || `완료 — 성공 ${(coupangProgress.processed || 0) - (coupangProgress.errors || 0)}건, 실패 ${coupangProgress.errors}건`)
-                  : coupangProgress.status === 'error'
-                    ? `오류: ${coupangProgress.message || '알 수 없는 오류'}`
-                    : (coupangProgress.phase || `처리 중 ${coupangProgress.current}/${coupangProgress.total}`)}
-              </span>
-              {coupangProgress.status !== 'running' && coupangProgress.status !== 'pending' && (
-                <Button size="sm" variant="ghost" onClick={() => setCoupangProgress(null)}>닫기</Button>
-              )}
-            </div>
-            <div className="h-2 rounded-full bg-ink-100 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-rose-500 transition-all duration-300"
-                style={{ width: `${coupangProgress.pct ?? 0}%` }}
               />
             </div>
           </div>
@@ -466,6 +462,7 @@ export default function ProductManagementPage() {
           />
         )}
       </Card>
+      </div>
     </div>
   );
 }

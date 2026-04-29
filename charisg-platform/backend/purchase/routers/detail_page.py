@@ -13,6 +13,7 @@ from backend.purchase.services.ai_processor import (
     get_batch_job,
     get_running_job,
     run_batch_background,
+    run_two_stage_batch,
 )
 
 router = APIRouter(prefix="/api/pa/detail-page", tags=["pa-detail-page"])
@@ -38,6 +39,7 @@ class BatchBody(BaseModel):
     all_unprocessed: bool = False
     all_products: bool = False
     platform: str = "smartstore"
+    two_stage: bool = True   # default: HTML 먼저 → AI 자동 (사용자 한 번 클릭)
 
 
 @router.post("/batch")
@@ -68,8 +70,11 @@ async def batch_generate(body: BatchBody, user: dict = Depends(current_user)):
         raise HTTPException(400, "처리 대상 상품 없음")
 
     job_id = create_batch_job(product_ids, body.platform)
-    asyncio.create_task(run_batch_background(job_id, product_ids, body.platform))
-    return {"job_id": job_id, "total": len(product_ids)}
+    if body.two_stage:
+        asyncio.create_task(run_two_stage_batch(job_id, product_ids, body.platform))
+    else:
+        asyncio.create_task(run_batch_background(job_id, product_ids, body.platform))
+    return {"job_id": job_id, "total": len(product_ids), "two_stage": body.two_stage}
 
 
 @router.get("/batch/{job_id}")

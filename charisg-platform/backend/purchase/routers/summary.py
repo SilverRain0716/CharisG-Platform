@@ -1,26 +1,29 @@
 """PA summary — Hub 카드용."""
 from fastapi import APIRouter
 
-from backend.purchase.database import get_db
+from backend.purchase.database import get_db, get_db_hot
 
 router = APIRouter(prefix="/api/pa", tags=["pa-summary"])
 
 
 @router.get("/summary")
 def pa_summary():
+    # cold.db: products, margin_calcs
     with get_db() as conn:
-        # TODO: 쿠팡/네이버 판매 상태 동기화(listed→active 자동 승격) 구현 후 status='active'만 카운트로 복원
         active = conn.execute("SELECT COUNT(*) c FROM products WHERE status IN ('listed','active')").fetchone()["c"]
+        avg_margin_row = conn.execute(
+            "SELECT AVG(seller_margin_pct) m FROM margin_calcs"
+        ).fetchone()
+        avg_margin = avg_margin_row["m"] if avg_margin_row and avg_margin_row["m"] is not None else 0
+
+    # hot.db: orders, cs_tickets
+    with get_db_hot() as conn:
         pending_orders = conn.execute(
             "SELECT COUNT(*) c FROM orders WHERE current_step NOT IN ('completed')"
         ).fetchone()["c"]
         pending_cs = conn.execute(
             "SELECT COUNT(*) c FROM cs_tickets WHERE status IN ('open','in_progress')"
         ).fetchone()["c"]
-        avg_margin_row = conn.execute(
-            "SELECT AVG(seller_margin_pct) m FROM margin_calcs"
-        ).fetchone()
-        avg_margin = avg_margin_row["m"] if avg_margin_row and avg_margin_row["m"] is not None else 0
         revenue_row = conn.execute(
             "SELECT COALESCE(SUM(sale_price_krw), 0) r FROM orders WHERE current_step='completed' "
             "AND date(completed_at) >= date('now', 'start of month')"

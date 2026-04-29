@@ -334,6 +334,15 @@ async def process_product(product_id: int, platform: str = "smartstore", force: 
     tr_title = results[1]
     tr_desc = results[2] if desc_task else None
 
+    # 이미지 0장이면 ai_processed_at 커밋 없이 조기 실패 → 재시도 대상으로 유지.
+    # 커밋되면 products.status가 pending으로 넘어가 쿠팡 업로드 단계에서 '이미지 없음'으로 실패한다.
+    downloaded = img_result.get("downloaded", 0) if isinstance(img_result, dict) else 0
+    if downloaded == 0:
+        raise RuntimeError(
+            f"이미지 다운로드 0장 — ai_processed_at 커밋 스킵 (재시도 필요). "
+            f"images_json={len(json.loads(images_json) if images_json else [])}장"
+        )
+
     title_ko = tr_title["translated"]
     description_ko = tr_desc["translated"] if tr_desc else None
 
@@ -474,12 +483,269 @@ def get_batch_job(job_id: str) -> dict | None:
 
 
 def get_running_job() -> dict | None:
-    """현재 실행 중인 job 조회 (running 또는 pending)."""
+    """현재 실행 중인 ai_detail job 조회 (running 또는 pending).
+
+    job_type 필터 필수 — batch_jobs 에는 coupang_order_sync/smartstore_order_sync 등
+    폴러 row 도 들어가서 ai_detail 이 가려질 수 있다.
+    """
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM batch_jobs WHERE status IN ('pending','running') ORDER BY created_at DESC LIMIT 1"
+            """SELECT * FROM batch_jobs
+               WHERE status IN ('pending','running') AND job_type='ai_detail'
+               ORDER BY created_at DESC LIMIT 1"""
         ).fetchone()
     return dict(row) if row else None
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 2-stage 분리 처리 (Option B)
+# Stage 1: 이미지 다운로드 + HTML 생성 + detail_pages INSERT (Gemini 호출 0)
+# Stage 2: 번역 + SEO + 카테고리 매핑 + products UPDATE (Gemini 호출 3~4)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def process_product_html_only(product_id: int, platform: str = "smartstore",
+                                     force: bool = False) -> dict:
+    """Stage 1 — 이미지 다운로드 + HTML 생성 + detail_pages INSERT.
+    Gemini 호출 X. 빠른 처리.
+    """
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+    if not row:
+        raise ValueError(f"product {product_id} 없음")
+    row = dict(row)
+
+    # 이미 detail_pages 가 있고 force=False 면 skip
+    if not force:
+        with get_db() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM detail_pages WHERE product_id=? AND html_content IS NOT NULL AND html_content != '' LIMIT 1",
+                (product_id,),
+            ).fetchone()
+        if existing:
+            return {"product_id": product_id, "skipped": True, "reason": "detail_pages 이미 있음"}
+
+    # 이미지 보충 (부족하면 Amazon 크롤링)
+    images_json = row.get("images_json") or "[]"
+    try:
+        existing_urls = json.loads(images_json) if images_json else []
+    except (json.JSONDecodeError, TypeError):
+        existing_urls = []
+    asin = row.get("asin") or ""
+    if len(existing_urls) < 3 and asin:
+        amazon_urls = fetch_amazon_images(asin)
+        if amazon_urls:
+            merged = list(dict.fromkeys(existing_urls + amazon_urls))
+            images_json = json.dumps(merged, ensure_ascii=False)
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE products SET images_json=? WHERE id=?",
+                    (images_json, product_id),
+                )
+
+    # 이미지 다운로드
+    img_result = await download_product_images(product_id, images_json)
+    downloaded = img_result.get("downloaded", 0) if isinstance(img_result, dict) else 0
+    if downloaded == 0:
+        raise RuntimeError(
+            f"이미지 다운로드 0장 — Stage 1 실패 (재시도 필요). "
+            f"images_json={len(json.loads(images_json) if images_json else [])}장"
+        )
+
+    # HTML 생성 + detail_pages INSERT
+    image_urls = img_result.get("local_urls") or []
+    html = _build_pa_html(image_urls)
+    sections_json = json.dumps(PA_SECTIONS)
+    detail_page_id = _save_detail_page_pa(product_id, html, sections_json, "KR", platform)
+
+    return {
+        "product_id": product_id,
+        "detail_page_id": detail_page_id,
+        "image_count": downloaded,
+        "html_length": len(html),
+    }
+
+
+async def process_product_ai_only(product_id: int, platform: str = "smartstore",
+                                   force: bool = False) -> dict:
+    """Stage 2 — 번역 + SEO + 카테고리 매핑 + products UPDATE.
+    Gemini 호출 3~4 (title 번역, desc 번역, SEO, 카테고리 매핑).
+    """
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+    if not row:
+        raise ValueError(f"product {product_id} 없음")
+    row = dict(row)
+
+    if not force and row.get("ai_processed_at"):
+        return {"product_id": product_id, "skipped": True, "reason": "이미 AI 처리됨"}
+
+    title_en = row.get("title_en") or ""
+    if not title_en:
+        raise ValueError(f"product {product_id}: title_en 없음")
+
+    description_en = row.get("description_en") or ""
+    existing_cat = row.get("category_path") or ""
+
+    # 1단계 병렬: title + description 번역
+    title_task = translate_text(title_en, "en", "ko")
+    desc_task = translate_text(description_en, "en", "ko") if description_en else None
+    tasks = [title_task] + ([desc_task] if desc_task else [])
+    results = await asyncio.gather(*tasks)
+    tr_title = results[0]
+    tr_desc = results[1] if desc_task else None
+    title_ko = tr_title["translated"]
+    description_ko = tr_desc["translated"] if tr_desc else None
+
+    # 2단계 병렬: SEO + 카테고리 매핑 (existing_cat 이 숫자면 카테고리 skip)
+    seo_task = generate_seo(
+        product_name=title_ko,
+        category=existing_cat,
+        market="KR",
+        platform=platform,
+        description=description_ko or "",
+    )
+    cat_task = None if existing_cat.isdigit() else resolve_category(
+        product_name=title_ko, source_hint=existing_cat,
+    )
+    stage2 = [seo_task] + ([cat_task] if cat_task else [])
+    stage2_results = await asyncio.gather(*stage2)
+    seo_result = stage2_results[0]
+    cat_result = stage2_results[1] if cat_task else None
+
+    seo_title = seo_result.get("optimized_title") or title_ko
+    if len(title_ko) > 50:
+        title_ko = seo_title[:50] if len(seo_title) <= 50 else seo_title[:47] + "..."
+    seo_tags_list = seo_result.get("tags") or seo_result.get("keywords") or []
+    seo_tags = json.dumps(seo_tags_list, ensure_ascii=False) if seo_tags_list else "[]"
+    mapped_category = existing_cat if cat_result is None else (
+        cat_result.get("mapped_category") or existing_cat
+    )
+
+    # products UPDATE — ai_processed_at 도 설정
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE products SET
+                  title_ko=?, description_ko=?, seo_title=?, seo_tags=?,
+                  category_path=COALESCE(?, category_path),
+                  ai_processed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+               WHERE id=?""",
+            (title_ko, description_ko, seo_title, seo_tags, mapped_category, product_id),
+        )
+
+    return {
+        "product_id": product_id,
+        "title_ko": title_ko,
+        "seo_title": seo_title,
+        "category_path": mapped_category,
+    }
+
+
+async def run_two_stage_batch(job_id: str, product_ids: list[int], platform: str = "smartstore"):
+    """2-stage batch — Stage 1 (HTML) 전체 → Stage 2 (AI) 전체 순차 실행.
+    phase_message 에 JSON 으로 두 stage 진행도 저장.
+    """
+    import os
+
+    s1_concurrency = int(os.environ.get("AI_BATCH_HTML_CONCURRENCY", "8"))
+    s2_concurrency = int(os.environ.get("AI_BATCH_CONCURRENCY", "4"))
+
+    total = len(product_ids)
+    state = {"stage": 1,
+             "s1": {"processed": 0, "total": total, "errors": 0, "skipped": 0},
+             "s2": {"processed": 0, "total": total, "errors": 0, "skipped": 0}}
+    state_lock = asyncio.Lock()
+
+    def _save_state():
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE batch_jobs SET phase_message=? WHERE id=?",
+                (json.dumps(state, ensure_ascii=False), job_id),
+            )
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE batch_jobs SET status='running', started_at=?, phase_message=? WHERE id=?",
+            (_now_iso(), json.dumps(state, ensure_ascii=False), job_id),
+        )
+
+    # ── Stage 1: HTML ──
+    sem1 = asyncio.Semaphore(max(1, s1_concurrency))
+
+    async def run_s1(pid: int):
+        async with sem1:
+            try:
+                r = await process_product_html_only(pid, platform)
+                async with state_lock:
+                    if r.get("skipped"):
+                        state["s1"]["skipped"] += 1
+                    else:
+                        state["s1"]["processed"] += 1
+            except Exception as e:
+                async with state_lock:
+                    state["s1"]["errors"] += 1
+                logger.warning(f"[two-stage {job_id}] S1 product {pid}: {e}")
+            # DB UPDATE — 매 5건마다 또는 마지막 (sqlite 충돌 방지)
+            async with state_lock:
+                done = state["s1"]["processed"] + state["s1"]["skipped"] + state["s1"]["errors"]
+                if done % 5 == 0 or done == total:
+                    with get_db() as conn:
+                        conn.execute(
+                            "UPDATE batch_jobs SET processed=?, errors=?, current_product_id=?, phase_message=? WHERE id=?",
+                            (state["s1"]["processed"] + state["s1"]["skipped"],
+                             state["s1"]["errors"] + state["s2"]["errors"],
+                             pid, json.dumps(state, ensure_ascii=False), job_id),
+                        )
+
+    await asyncio.gather(*[run_s1(p) for p in product_ids], return_exceptions=False)
+    logger.info(f"[two-stage {job_id}] Stage 1 완료 — {state['s1']}")
+
+    # ── Stage 2: AI ──
+    state["stage"] = 2
+    _save_state()
+    sem2 = asyncio.Semaphore(max(1, s2_concurrency))
+
+    async def run_s2(pid: int):
+        async with sem2:
+            try:
+                r = await process_product_ai_only(pid, platform)
+                async with state_lock:
+                    if r.get("skipped"):
+                        state["s2"]["skipped"] += 1
+                    else:
+                        state["s2"]["processed"] += 1
+            except Exception as e:
+                async with state_lock:
+                    state["s2"]["errors"] += 1
+                logger.warning(f"[two-stage {job_id}] S2 product {pid}: {e}")
+            # DB UPDATE — 매 5건마다 또는 마지막
+            async with state_lock:
+                done = state["s2"]["processed"] + state["s2"]["skipped"] + state["s2"]["errors"]
+                if done % 5 == 0 or done == total:
+                    with get_db() as conn:
+                        conn.execute(
+                            "UPDATE batch_jobs SET processed=?, errors=?, current_product_id=?, phase_message=? WHERE id=?",
+                            (total + state["s2"]["processed"] + state["s2"]["skipped"],
+                             state["s1"]["errors"] + state["s2"]["errors"],
+                             pid, json.dumps(state, ensure_ascii=False), job_id),
+                        )
+
+    await asyncio.gather(*[run_s2(p) for p in product_ids], return_exceptions=False)
+
+    state["stage"] = 3  # 완료
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE batch_jobs SET status='done', processed=?, errors=?,
+                   finished_at=?, current_product_id=NULL, phase_message=?
+               WHERE id=?""",
+            (
+                total * 2,
+                state["s1"]["errors"] + state["s2"]["errors"],
+                _now_iso(),
+                json.dumps(state, ensure_ascii=False),
+                job_id,
+            ),
+        )
+    logger.info(f"[two-stage {job_id}] 완료 — S1 {state['s1']}, S2 {state['s2']}")
 
 
 async def run_batch_background(job_id: str, product_ids: list[int], platform: str = "smartstore"):

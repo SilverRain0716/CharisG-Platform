@@ -18,14 +18,17 @@ _FEE_KEY = {
     "coupang": "coupang_fee_rate",
 }
 _DEFAULT_TARGET_MARGIN_KEY = "margin_target_rate"
+_AMAZON_SHIP_KEY = "amazon_shipping_default_usd"
 
 
-def _get_setting_float(key: str) -> float:
+def _get_setting_float(key: str, default: float | None = None) -> float:
     with get_db() as conn:
         row = conn.execute(
             "SELECT value FROM settings WHERE key=?", (key,)
         ).fetchone()
     if not row or row["value"] is None or row["value"] == "":
+        if default is not None:
+            return default
         raise ValueError(f"settings 에 {key} 누락")
     return float(row["value"])
 
@@ -36,15 +39,20 @@ def _get_channel_fee_rate(channel: str) -> float:
 
 def calculate_sale_krw(
     cost_usd: float,
-    amazon_shipping_usd: float = 0.0,
+    amazon_shipping_usd: float | None = None,
     cj_shipping_usd: float = 0.0,
     channel: str = "smartstore",
     target_margin_override: float | None = None,
 ) -> dict:
+    """채널별 목표 마진 역산 — 호출자가 amazon_shipping_usd 명시 안 하면
+    settings.amazon_shipping_default_usd 자동 로드 (기본 0).
+    """
     if channel not in _ALLOWED_CHANNELS:
         raise ValueError(
             f"unknown channel: {channel} (allowed: {_ALLOWED_CHANNELS})"
         )
+    if amazon_shipping_usd is None:
+        amazon_shipping_usd = _get_setting_float(_AMAZON_SHIP_KEY, default=0.0)
     if cost_usd < 0 or amazon_shipping_usd < 0 or cj_shipping_usd < 0:
         raise ValueError("cost/shipping 값은 0 이상이어야 함")
 

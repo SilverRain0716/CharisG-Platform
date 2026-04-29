@@ -11,14 +11,19 @@ import ProductManagementPage from './pages/ProductManagementPage.jsx';
 import SmartStorePage from './pages/SmartStorePage.jsx';
 import CoupangPage from './pages/CoupangPage.jsx';
 import OrdersAndCsPage from './pages/OrdersAndCsPage.jsx';
+import OrderDetailPage from './pages/OrderDetailPage.jsx';
+import GroupsPage from './pages/GroupsPage.jsx';
+import GroupDetailPage from './pages/GroupDetailPage.jsx';
 import MonitoringPage from './pages/MonitoringPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
+import CategoryMappingPage from './pages/CategoryMappingPage.jsx';
 
 const NAV = [
   { id: 'dashboard',  href: '/',           label: '대시보드' },
   { id: 'discovery',  href: '/discovery',  label: '디스커버리' },
   { id: 'sourcing',   href: '/sourcing',   label: '소싱' },
   { id: 'products',   href: '/products',   label: '상품 관리' },
+  { id: 'category-map', href: '/category-map', label: '카테고리 매핑' },
   { id: 'smartstore', href: '/smartstore', label: '스마트스토어' },
   { id: 'coupang',    href: '/coupang',    label: '쿠팡' },
   { id: 'orders',     href: '/orders',     label: '주문·CS' },
@@ -77,9 +82,13 @@ export default function App() {
             <Route path="/discovery" element={<DiscoveryPage />} />
             <Route path="/sourcing" element={<SourcingPage />} />
             <Route path="/products" element={<ProductManagementPage />} />
+            <Route path="/groups" element={<GroupsPage />} />
+            <Route path="/groups/:parentAsin" element={<GroupDetailPage />} />
+            <Route path="/category-map" element={<CategoryMappingPage />} />
             <Route path="/smartstore" element={<SmartStorePage />} />
             <Route path="/coupang" element={<CoupangPage />} />
             <Route path="/orders" element={<OrdersAndCsPage />} />
+            <Route path="/orders/:oid" element={<OrderDetailPage />} />
             <Route path="/monitor" element={<MonitoringPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

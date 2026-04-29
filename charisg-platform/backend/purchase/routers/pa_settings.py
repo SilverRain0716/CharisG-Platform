@@ -1,12 +1,20 @@
 """PA Settings — 마진 파라미터, 크롤 스케줄, 알림, API 연동 상태."""
-from fastapi import APIRouter, Depends
+import logging
+import time
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.purchase.auth import current_user
 from backend.purchase.database import get_db
 from backend_shared import _config as cfg
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pa/settings", tags=["pa-settings"])
+
+# 네이버 RELEASE 주소록 TTL 캐시 (배대지 주소 바뀔 일 드물어 1시간 충분).
+_RELEASE_ADDRESS_CACHE: dict = {"fetched_at": 0, "data": None}
+_RELEASE_TTL_SEC = 3600
 
 
 @router.get("")
@@ -116,3 +124,79 @@ def update_pricing_settings(
                     (key, str(value)),
                 )
     return _load_pricing_settings()
+
+
+# ──────────────────────────────────────────────
+# Release address (배대지 주소) — Naver addressbook RELEASE 조회
+# 아마존 발주 패널 "Ship to (forwarder)" 표시용. TTL 1h 캐시.
+# ──────────────────────────────────────────────
+
+def _format_release_address(entry: dict) -> dict:
+    """Naver addressbook entry → 패널에서 쓰기 좋은 평탄화된 dict.
+
+    해외주소(overseasAddress=True)의 경우 `address` 필드에 전체 완성형이 들어있고
+    base/detail은 일부 조각만 — Ship-To 복사용 full_line은 `address` 원본을 우선 사용.
+    """
+    if not isinstance(entry, dict):
+        return {}
+    base = entry.get("baseAddress", "") or ""
+    detail = entry.get("detailAddress", "") or ""
+    postal = entry.get("postalCode", "") or ""
+    phone1 = entry.get("phoneNumber1", "") or ""
+    phone2 = entry.get("phoneNumber2", "") or ""
+    oversea = bool(entry.get("overseasAddress"))
+    raw_address = entry.get("address", "") or ""
+
+    # Ship-To 복사용 multi-line 포맷
+    # - 해외주소: name + 원본 address (도시/주/국가 포함) + phone
+    # - 국내주소: name + base + detail + postal + phone
+    if oversea:
+        full_line = "\n".join(
+            p for p in (entry.get("name", ""), raw_address, f"Phone: {phone1}" if phone1 else "") if p
+        )
+    else:
+        full_line = "\n".join(
+            p for p in (entry.get("name", ""), base, detail, postal, f"Tel: {phone1}" if phone1 else "") if p
+        )
+
+    return {
+        "name": entry.get("name", ""),
+        "base_address": base,
+        "detail_address": detail,
+        "postal_code": postal,
+        "phone1": phone1,
+        "phone2": phone2,
+        "oversea": oversea,
+        "raw_address": raw_address,
+        "full_line": full_line,
+    }
+
+
+@router.get("/release-address")
+def get_release_address(user: dict = Depends(current_user)):
+    """배대지(네이버 RELEASE 주소록 1번 엔트리) — 아마존 발주 ship-to 용.
+
+    1시간 TTL 캐시. 조회 실패 시 503.
+    """
+    now = time.time()
+    if _RELEASE_ADDRESS_CACHE["data"] and (now - _RELEASE_ADDRESS_CACHE["fetched_at"]) < _RELEASE_TTL_SEC:
+        return _RELEASE_ADDRESS_CACHE["data"]
+
+    # 지연 import — 모듈 import 시점에 네이버 설정 없어도 부팅 되게.
+    from backend.purchase.services.naver_commerce_service import get_addressbook_by_type
+
+    entry = get_addressbook_by_type("RELEASE")
+    if not entry:
+        raise HTTPException(503, "네이버 주소록 조회 실패 — naver_commerce 인증 확인")
+    data = _format_release_address(entry)
+    _RELEASE_ADDRESS_CACHE["data"] = data
+    _RELEASE_ADDRESS_CACHE["fetched_at"] = now
+    return data
+
+
+@router.post("/release-address/refresh")
+def refresh_release_address(user: dict = Depends(current_user)):
+    """캐시 무효화 후 재조회."""
+    _RELEASE_ADDRESS_CACHE["data"] = None
+    _RELEASE_ADDRESS_CACHE["fetched_at"] = 0
+    return get_release_address(user)
