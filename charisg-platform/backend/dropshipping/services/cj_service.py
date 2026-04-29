@@ -32,6 +32,43 @@ DEFAULT_MARGIN_MIN = 25.0  # Amazon Referral Fee 반영 후 실질 마진 기준
 from backend.dropshipping.database import get_db
 
 
+def _extract_warehouse(raw: dict) -> tuple[bool, str | None]:
+    """CJ API 응답에서 창고 국가 추출.
+
+    Returns: (us_warehouse: bool, warehouse_country: str|None)
+    """
+    shipping_codes = raw.get("shippingCountryCodes") or []
+    if not shipping_codes:
+        shipping_codes = [
+            str(w.get("countryCode", "")).upper()
+            for w in raw.get("sourceWarehouse", [])
+        ]
+    else:
+        shipping_codes = [str(c).upper() for c in shipping_codes]
+
+    us_warehouse = "US" in shipping_codes
+    cn_warehouse = "CN" in shipping_codes
+    warehouse_country = "US" if us_warehouse else ("CN" if cn_warehouse else None)
+    return us_warehouse, warehouse_country
+
+
+def _update_warehouse_info(raw: dict, pid: str):
+    """모든 상품의 창고 정보를 DB에 업데이트 (Hard Filter 통과 여부 무관)."""
+    us_warehouse, warehouse_country = _extract_warehouse(raw)
+    if not pid:
+        return
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE collected_products
+                   SET us_warehouse=?, warehouse_country=?
+                   WHERE external_id=? AND source='cj'""",
+                (int(us_warehouse), warehouse_country or "", pid),
+            )
+    except Exception:
+        pass  # 존재하지 않는 상품이면 무시
+
+
 def _log_filter_fail(pid: str, name: str, category: str,
                      source_price: float, calculated_price: float, reason: str):
     """Hard Filter 탈락 상품을 DB에 기록 (filter_fail_reason 포함)"""
@@ -299,6 +336,10 @@ def collect_full_catalog(
             raw_collected += len(raw_list)
 
             for raw in raw_list:
+                # ── 모든 상품의 창고 정보 먼저 업데이트 ──
+                raw_pid = raw.get("pid", "")
+                _update_warehouse_info(raw, raw_pid)
+
                 item = _parse_product(
                     raw, cat["level3"], token,
                     DEFAULT_PRICE_MIN, DEFAULT_PRICE_MAX, DEFAULT_MARGIN_MIN,
@@ -505,15 +546,11 @@ def _parse_product(
         # ═══ Hard Filter (탈락 사유 기록) ═══
 
         # [1] 창고 필터: US 또는 CN 중 하나 이상 필요 (US 우선)
-        warehouses = [
-            str(w.get("countryCode", "")).upper()
-            for w in raw.get("sourceWarehouse", [])
-        ]
-        us_warehouse = "US" in warehouses
-        cn_warehouse = "CN" in warehouses
-        warehouse_country = "US" if us_warehouse else ("CN" if cn_warehouse else None)
+        us_warehouse, warehouse_country = _extract_warehouse(raw)
         if not warehouse_country:
-            _log_filter_fail(pid, product_name, keyword, sell_price, suggest_price, "no_us_cn_warehouse")
+            shipping_codes = raw.get("shippingCountryCodes") or []
+            _log_filter_fail(pid, product_name, keyword, sell_price, suggest_price,
+                             f"no_us_cn_warehouse:{','.join(str(c) for c in shipping_codes) or 'empty'}")
             return None
 
         # [3] 재고 ≥ 10

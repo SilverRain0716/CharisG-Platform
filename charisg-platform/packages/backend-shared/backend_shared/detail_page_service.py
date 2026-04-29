@@ -179,12 +179,15 @@ def generate_detail_page(
     # DB 저장
     detail_page_id = _save_detail_page(product["id"], template_id, market, platform, html)
 
-    # collected_products 상태 업데이트
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE collected_products SET detail_page_done=1, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (product["id"],),
-        )
+    # collected_products 상태 업데이트 (DS 전용 테이블 — PA 환경엔 없음)
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE collected_products SET detail_page_done=1, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (product["id"],),
+            )
+    except Exception:
+        pass
 
     return {
         "product_id": product["id"],
@@ -289,24 +292,32 @@ def _bind_variables(template: str, variables: dict) -> str:
 
 
 def _load_sections(template_id: Optional[int]) -> list:
-    """템플릿 섹션 구성 로드"""
-    if template_id:
+    """템플릿 섹션 구성 로드. detail_templates 비어있거나 잘못된 JSON 이면 default."""
+    try:
+        if template_id:
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT sections_template FROM detail_templates WHERE id = ?",
+                    (template_id,),
+                ).fetchone()
+                if row:
+                    try:
+                        return json.loads(row["sections_template"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+        # 활성 템플릿 (detail_templates 에 is_active 컬럼 없음 — 첫 row 사용)
         with get_db() as conn:
-            row = conn.execute("SELECT sections_config FROM templates WHERE id = ?", (template_id,)).fetchone()
+            row = conn.execute(
+                "SELECT sections_template FROM detail_templates ORDER BY id LIMIT 1"
+            ).fetchone()
             if row:
                 try:
-                    return json.loads(row["sections_config"])
+                    return json.loads(row["sections_template"])
                 except (json.JSONDecodeError, TypeError):
                     pass
-
-    # 활성 템플릿 찾기
-    with get_db() as conn:
-        row = conn.execute("SELECT sections_config FROM templates WHERE is_active = 1 LIMIT 1").fetchone()
-        if row:
-            try:
-                return json.loads(row["sections_config"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+    except Exception:
+        pass  # 테이블/스키마 이슈 → default fallback
 
     # 기본값
     return [
@@ -339,7 +350,9 @@ def _save_detail_page(product_id: int, template_id: Optional[int], market: str, 
             return existing["id"]
         else:
             cur = conn.execute(
-                "INSERT INTO detail_pages (product_id, template_id, market, platform, html_content, status) VALUES (?,?,?,?,?,?)",
+                """INSERT INTO detail_pages
+                   (product_id, template_id, market, platform, html_content, status, sections)
+                   VALUES (?,?,?,?,?,?,'[]')""",
                 (product_id, template_id, market, platform, html, "draft"),
             )
             return cur.lastrowid

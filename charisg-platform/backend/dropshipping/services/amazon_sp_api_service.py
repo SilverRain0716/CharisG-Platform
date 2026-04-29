@@ -38,6 +38,18 @@ def get_credentials() -> dict:
 def get_marketplace() -> Marketplaces:
     """SP_API_MARKETPLACE_ID → Marketplaces enum 변환. 기본 US."""
     mp_id = os.environ.get("SP_API_MARKETPLACE_ID", "ATVPDKIKX0DER")
+    return _resolve_marketplace(mp_id)
+
+
+def get_marketplace_for(marketplace_id: str) -> Marketplaces:
+    """marketplace_id 문자열 → Marketplaces enum 변환.
+
+    NA 통합 계정: 크레덴셜은 동일, marketplace_id만 다름.
+    """
+    return _resolve_marketplace(marketplace_id)
+
+
+def _resolve_marketplace(mp_id: str) -> Marketplaces:
     for mp in Marketplaces:
         if mp.marketplace_id == mp_id:
             return mp

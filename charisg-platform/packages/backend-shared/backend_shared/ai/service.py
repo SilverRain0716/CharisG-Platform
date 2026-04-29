@@ -18,7 +18,7 @@ from typing import Optional
 import requests
 
 import os
-from backend_shared._config import GEMINI_API_KEY
+from backend_shared._config import GEMINI_API_KEY, GEMINI_API_KEY_FALLBACK
 from backend_shared.context import get_db
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ AI_PROVIDER = os.environ.get("AI_PROVIDER", "gemini")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Gemini 모델 설정
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 # Gemini 임베딩 모델 (768차원 축소 사용)
@@ -340,71 +340,89 @@ def _call_ai_sync(prompt: str, max_tokens: int = 2000) -> Optional[str]:
 
 
 def _call_gemini(prompt: str, max_tokens: int = 2000, max_retries: int = 3) -> Optional[str]:
-    """Google Gemini API 호출 (rate limit + 429 재시도)"""
-    if not GEMINI_API_KEY:
+    """Google Gemini API 호출 (rate limit + 429 재시도 + 무료→유료 자동 fallback).
+
+    호출 순서: GEMINI_API_KEY_FALLBACK(무료) 먼저 → quota 초과 시 GEMINI_API_KEY(유료) 자동 전환.
+    유료도 quota 초과면 None.
+    """
+    keys: list[tuple[str, str]] = []   # [(key, label)]
+    if GEMINI_API_KEY_FALLBACK:
+        keys.append((GEMINI_API_KEY_FALLBACK, "free"))
+    if GEMINI_API_KEY and GEMINI_API_KEY != GEMINI_API_KEY_FALLBACK:
+        keys.append((GEMINI_API_KEY, "paid"))
+    if not keys:
         logger.error("GEMINI_API_KEY not set")
         return None
 
-    for attempt in range(max_retries):
-        # Rate limiter 대기
-        if not gemini_limiter.wait():
-            logger.error("Gemini 일간 한도 초과 — 호출 중단")
-            return None
+    for key_idx, (key, label) in enumerate(keys):
+        if key_idx > 0:
+            logger.info(f"⚙ Gemini {label} 키로 전환 (#{key_idx + 1})")
+        for attempt in range(max_retries):
+            # Rate limiter 대기
+            if not gemini_limiter.wait():
+                logger.error("Gemini 일간 한도 초과 — 호출 중단")
+                return None
 
-        try:
-            resp = requests.post(
-                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "maxOutputTokens": max_tokens,
-                        "temperature": 0.3,
-                        "thinkingConfig": {"thinkingBudget": 0},
+            try:
+                resp = requests.post(
+                    f"{GEMINI_URL}?key={key}",
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {
+                            "maxOutputTokens": max_tokens,
+                            "temperature": 0.3,
+                            "thinkingConfig": {"thinkingBudget": 0},
+                        },
                     },
-                },
-                timeout=30,
-            )
+                    timeout=30,
+                )
 
-            if resp.status_code == 429:
-                wait = 30 * (attempt + 1)
-                logger.warning(f"⏳ Gemini 429 Rate Limit → {wait}초 대기 ({attempt + 1}/{max_retries})")
-                time.sleep(wait)
-                continue
+                # 429 + body 에 'quota' 포함이면 다음 키로 전환 (단, attempt 1회 후)
+                if resp.status_code == 429:
+                    body_text = resp.text or ""
+                    is_quota_exhausted = "quota" in body_text.lower() or "exceeded" in body_text.lower()
+                    if is_quota_exhausted and key_idx < len(keys) - 1 and attempt >= 1:
+                        logger.warning(f"⏳ Gemini {label} 키 quota 소진 → 다음 키로 전환")
+                        break  # 다음 key 로
+                    wait = 30 * (attempt + 1)
+                    logger.warning(f"⏳ Gemini 429 → {wait}초 대기 ({label} {attempt + 1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
 
-            if resp.status_code == 503:
-                wait = 3 * (2 ** attempt)  # 3s, 6s, 12s
-                logger.warning(f"⏳ Gemini 503 서버 과부하 → {wait}초 대기 ({attempt + 1}/{max_retries})")
-                time.sleep(wait)
-                continue
+                if resp.status_code == 503:
+                    wait = 3 * (2 ** attempt)  # 3s, 6s, 12s
+                    logger.warning(f"⏳ Gemini 503 서버 과부하 → {wait}초 대기 (key#{key_idx + 1} {attempt + 1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
 
-            data = resp.json()
+                data = resp.json()
 
-            if "candidates" in data and data["candidates"]:
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                # JSON 코드블록 제거
-                text = text.strip()
-                if text.startswith("```json"):
-                    text = text[7:]
-                if text.startswith("```"):
-                    text = text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                return text.strip()
+                if "candidates" in data and data["candidates"]:
+                    text = data["candidates"][0]["content"]["parts"][0]["text"]
+                    # JSON 코드블록 제거
+                    text = text.strip()
+                    if text.startswith("```json"):
+                        text = text[7:]
+                    if text.startswith("```"):
+                        text = text[3:]
+                    if text.endswith("```"):
+                        text = text[:-3]
+                    return text.strip()
 
-            logger.warning(f"Gemini 응답 없음: {str(data)[:200]}")
-            return None
+                logger.warning(f"Gemini 응답 없음: {str(data)[:200]}")
+                return None
 
-        except requests.exceptions.Timeout:
-            logger.warning(f"Gemini 타임아웃 ({attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(5)
-                continue
-            return None
-        except Exception as e:
-            logger.error(f"Gemini API 오류: {e}")
-            return None
+            except requests.exceptions.Timeout:
+                logger.warning(f"Gemini 타임아웃 (key#{key_idx + 1} {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    time.sleep(5)
+                    continue
+                break  # 다음 키
+            except Exception as e:
+                logger.error(f"Gemini API 오류 (key#{key_idx + 1}): {e}")
+                break  # 다음 키
 
-    logger.error(f"Gemini API {max_retries}회 재시도 실패")
+    logger.error(f"Gemini API {len(keys)}개 키 모두 재시도 실패")
     return None
 
 

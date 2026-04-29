@@ -191,80 +191,243 @@ def find_best_category(product_name: str, category_hint: str = "") -> dict:
     return {"id": "50003767", "name": "데코용품", "whole_name": "생활/건강>문구/사무용품>이벤트/파티용품>데코용품", "score": 0}
 
 
-def find_category_with_gemini(product_name: str, category_hint: str = "", features: list = None) -> dict:
-    """
-    Gemini를 사용해서 최적의 네이버 카테고리 매핑
-    DB에 캐싱된 카테고리 목록 중 후보를 추려서 Gemini에게 최종 선택 요청
-    """
-    # 1차: 키워드 매칭으로 후보 추리기
-    conn = _get_db()
-    candidates = []
+_HANGUL_RE = None  # lazy compile
 
-    search_terms = _extract_keywords(product_name, category_hint)
-    for term in search_terms[:5]:
-        rows = conn.execute(
-            "SELECT id, whole_name FROM naver_categories WHERE whole_name LIKE ? LIMIT 5",
-            (f"%{term}%",),
-        ).fetchall()
-        for r in rows:
-            if r["id"] not in [c["id"] for c in candidates]:
-                candidates.append({"id": r["id"], "whole_name": r["whole_name"]})
 
-    conn.close()
+def _looks_english(text: str) -> bool:
+    """ASCII 비율이 80% 이상이면 영문 위주로 판정."""
+    if not text:
+        return False
+    text = text.strip()
+    if not text:
+        return False
+    ascii_chars = sum(1 for c in text if ord(c) < 128)
+    return (ascii_chars / len(text)) >= 0.8
 
-    if not candidates:
-        return find_best_category(product_name, category_hint)
 
-    # 2차: Gemini에게 후보 중 최적 선택 요청
+def _ensure_korean_name(text: str) -> str:
+    """영문 위주면 translate_text 로 한국어 변환. 실패 시 원문 유지."""
+    if not text or not _looks_english(text):
+        return text
+    try:
+        from backend_shared.ai.service import translate_text
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        coro = translate_text(text, source_lang="en", target_lang="ko",
+                              context="한국 쇼핑몰(쿠팡/스마트스토어) 카테고리 매핑용 상품명")
+        if loop is None:
+            res = asyncio.run(coro)
+        else:
+            new_loop = asyncio.new_event_loop()
+            try:
+                res = new_loop.run_until_complete(coro)
+            finally:
+                new_loop.close()
+        translated = (res or {}).get("translated", "").strip()
+        return translated or text
+    except Exception as e:
+        logger.warning(f"[category] translate_text 실패: {e}")
+        return text
+
+
+def _korean_tokens(text: str) -> list[str]:
+    """간단 한국어 토큰화 — 띄어쓰기 split + 2자 이상 + 특수문자 제거."""
+    import re
+    global _HANGUL_RE
+    if _HANGUL_RE is None:
+        _HANGUL_RE = re.compile(r"[가-힣A-Za-z0-9]+")
+    tokens = _HANGUL_RE.findall(text or "")
+    seen = []
+    for t in tokens:
+        if len(t) >= 2 and t not in seen:
+            seen.append(t)
+    return seen
+
+
+def _ai_suggest_category_keywords(product_name: str) -> list[str]:
+    """후보 부족 시 AI 가 카테고리 키워드 추천 — 한국 쇼핑몰 카테고리 어휘로."""
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     if not gemini_key:
-        return find_best_category(product_name, category_hint)
-
-    candidate_text = "\n".join([f"- {c['id']}: {c['whole_name']}" for c in candidates[:15]])
-    features_text = ", ".join(features[:5]) if features else ""
-
-    prompt = f"""다음 상품에 가장 적합한 네이버 스마트스토어 카테고리 ID를 선택하세요.
-
-상품명: {product_name}
-상품 카테고리 힌트: {category_hint}
-상품 특징: {features_text}
-
-후보 카테고리:
-{candidate_text}
-
-반드시 위 후보 중 하나의 ID만 숫자로 응답하세요. 다른 텍스트 없이 ID만 출력하세요."""
-
+        return []
+    prompt = (
+        f"한국 쇼핑몰(쿠팡/스마트스토어) 의 카테고리 트리에서 다음 상품을 검색할 때 "
+        f"유용한 키워드 5개를 추천해줘. 명사 위주, 한국어, 한 줄에 하나씩.\n\n"
+        f"상품명: {product_name}\n\n"
+        f"키워드만 출력 (번호/설명 없이):"
+    )
     try:
         from backend_shared.ai import gemini_limiter
         if not gemini_limiter.wait():
-            logger.warning("Gemini 일간 한도 초과 — 카테고리 매핑 스킵")
-            return find_best_category(product_name, category_hint)
-
+            return []
         resp = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}",
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=15,
         )
-
-        if resp.status_code == 429:
-            logger.warning("Gemini 429 — 카테고리 매핑 폴백")
-            return find_best_category(product_name, category_hint)
-
-        result = resp.json()
-        text = result["candidates"][0]["content"]["parts"][0]["text"].strip()
-
-        # ID 추출
-        cat_id = "".join(c for c in text if c.isdigit())
-        matched = next((c for c in candidates if c["id"] == cat_id), None)
-        if matched:
-            logger.info("Gemini 카테고리 매칭: %s → %s", product_name[:30], matched["whole_name"])
-            return {"id": matched["id"], "name": matched["whole_name"].split(">")[-1], "whole_name": matched["whole_name"], "score": 100}
-
+        if resp.status_code != 200:
+            return []
+        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        tokens = [line.strip(" -·•").strip() for line in text.splitlines() if line.strip()]
+        return [t for t in tokens if 2 <= len(t) <= 30][:8]
     except Exception as e:
-        logger.warning("Gemini 카테고리 매칭 실패: %s", e)
+        logger.warning(f"[category] _ai_suggest_category_keywords 실패: {e}")
+        return []
 
-    # Gemini 실패 시 키워드 매칭 폴백
-    return find_best_category(product_name, category_hint)
+
+def _search_candidates(terms: list[str], limit_per_term: int = 8) -> list[dict]:
+    """terms 의 각 키워드로 naver_categories LIKE 검색 → 후보 dedupe 반환."""
+    conn = _get_db()
+    candidates: list[dict] = []
+    seen_ids: set[str] = set()
+    try:
+        for term in terms:
+            term = term.strip()
+            if not term:
+                continue
+            rows = conn.execute(
+                "SELECT id, whole_name FROM naver_categories WHERE whole_name LIKE ? AND is_leaf=1 LIMIT ?",
+                (f"%{term}%", limit_per_term),
+            ).fetchall()
+            for r in rows:
+                if r["id"] in seen_ids:
+                    continue
+                seen_ids.add(r["id"])
+                candidates.append({"id": r["id"], "whole_name": r["whole_name"]})
+    finally:
+        conn.close()
+    return candidates
+
+
+def find_category_with_gemini(
+    product_name: str, category_hint: str = "", features: list = None,
+    sample_titles: list = None, sample_en: str = "",
+) -> dict:
+    """네이버 leaf 카테고리 자동 매핑.
+
+    개선 사항 (2026-04-27):
+    - 영문 product_name 자동 한국어 번역
+    - 한국어 토큰 기반 후보 검색
+    - 후보 부족 시 AI 키워드 추천 → 재검색
+    - Gemini score (0~100) 응답 → caller 가 임계값 미만은 review 큐로
+    - 인테리어 fallback dict 제거 (잘못된 강제 매핑 방지)
+
+    추가 신호 (E 강화):
+    - sample_titles: 같은 키워드의 다른 상품 제목 (한국어, 최대 3건) — 키워드 모호성 해소
+    - sample_en: 영문 원문 1건 — 한국어 번역 누락 보완
+    """
+    # 1) 영문 → 한국어 보장
+    name_for_search = _ensure_korean_name(product_name) if product_name else ""
+
+    # 2) 1차 키워드 매칭 (한국어 토큰 + category_hint)
+    terms = _korean_tokens(name_for_search)
+    if category_hint:
+        terms = [category_hint] + terms
+    terms = terms[:8]
+    candidates = _search_candidates(terms, limit_per_term=8)
+
+    # 3) 후보 부족 시 AI 키워드 추천 → 재검색
+    if len(candidates) < 10:
+        suggested = _ai_suggest_category_keywords(name_for_search or product_name)
+        if suggested:
+            extra = _search_candidates(suggested, limit_per_term=6)
+            existing_ids = {c["id"] for c in candidates}
+            for c in extra:
+                if c["id"] not in existing_ids:
+                    candidates.append(c)
+
+    if not candidates:
+        logger.warning(f"[category] 후보 0건: {(product_name or '')[:50]}")
+        return {"id": "", "name": "", "whole_name": "", "score": 0, "needs_review": True}
+
+    # 4) Gemini 매핑 + score
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key:
+        return {"id": candidates[0]["id"], "name": candidates[0]["whole_name"].split(">")[-1],
+                "whole_name": candidates[0]["whole_name"], "score": 30, "needs_review": True}
+
+    candidate_text = "\n".join(f"- {c['id']}: {c['whole_name']}" for c in candidates[:30])
+    features_text = ", ".join((features or [])[:5])
+
+    # E 강화: 샘플 제목 (최대 3건) + 영문 원문 — 키워드 모호성 해소용
+    samples_block = ""
+    if sample_titles:
+        sample_lines = "\n".join(f"  - {t}" for t in sample_titles[:3] if t)
+        if sample_lines:
+            samples_block += f"\n같은 키워드 다른 상품 제목:\n{sample_lines}"
+    if sample_en:
+        samples_block += f"\n영문 원문 (참고): {sample_en[:200]}"
+
+    prompt = (
+        f"다음 상품에 가장 적합한 네이버 스마트스토어 leaf 카테고리를 선택하세요.\n\n"
+        f"상품명(원본): {product_name}\n"
+        f"상품명(한국어): {name_for_search}\n"
+        f"카테고리 힌트: {category_hint}\n"
+        f"상품 특징: {features_text}{samples_block}\n\n"
+        f"후보 카테고리:\n{candidate_text}\n\n"
+        f"규칙:\n"
+        f"1. 반드시 위 후보 중 하나만 선택\n"
+        f"2. 같은 단어가 여러 카테고리에 있을 때 (예: '선글라스' → 사람용/반려동물용) "
+        f"샘플 제목과 영문 원문을 종합해 의도 파악 — 모호하면 score 낮춰서 답변\n"
+        f"3. 매칭 신뢰도 점수(0~100) 함께 답변\n"
+        f"   - 90+: 카테고리가 정확히 일치\n"
+        f"   - 70-89: 적당히 일치\n"
+        f"   - 50-69: 애매함\n"
+        f"   - 0-49: 거의 추측\n"
+        f"4. JSON 형식으로만 응답 (다른 텍스트 없이):\n"
+        f'   {{"id": "12345", "score": 85, "reason": "한 줄 이유"}}'
+    )
+
+    try:
+        from backend_shared.ai import gemini_limiter
+        if not gemini_limiter.wait():
+            logger.warning("Gemini 일간 한도 초과 — 카테고리 매핑 스킵")
+            return {"id": "", "name": "", "whole_name": "", "score": 0, "needs_review": True}
+
+        resp = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}",
+            json={"contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"responseMimeType": "application/json"}},
+            timeout=20,
+        )
+        if resp.status_code == 429:
+            return {"id": "", "name": "", "whole_name": "", "score": 0, "needs_review": True}
+        if resp.status_code != 200:
+            logger.warning(f"[category] Gemini {resp.status_code}: {resp.text[:200]}")
+            return {"id": "", "name": "", "whole_name": "", "score": 0, "needs_review": True}
+
+        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            # JSON 모드 강제했지만 fallback — id 만 숫자로 추출
+            digits = "".join(c for c in text if c.isdigit())
+            parsed = {"id": digits, "score": 50}
+        cat_id = str(parsed.get("id") or "").strip()
+        score = int(parsed.get("score") or 0)
+        matched = next((c for c in candidates if c["id"] == cat_id), None)
+        if not matched:
+            logger.warning(f"[category] Gemini 가 후보 외 ID 응답: {cat_id} (텍스트: {text[:120]})")
+            return {"id": "", "name": "", "whole_name": "", "score": 0, "needs_review": True,
+                    "raw_response": text[:200]}
+
+        # 임계값 70 — 50~69 는 모호한 매핑이라 review 필수 (E 강화)
+        needs_review = score < 70
+        logger.info(f"[category] {(product_name or '')[:30]} → {matched['whole_name']} "
+                    f"(score={score}, review={needs_review})")
+        return {
+            "id": matched["id"],
+            "name": matched["whole_name"].split(">")[-1],
+            "whole_name": matched["whole_name"],
+            "score": score,
+            "needs_review": needs_review,
+            "reason": parsed.get("reason", ""),
+        }
+    except Exception as e:
+        logger.warning(f"[category] Gemini 카테고리 매핑 실패: {e}")
+        return {"id": "", "name": "", "whole_name": "", "score": 0, "needs_review": True}
 
 
 def _extract_keywords(product_name: str, category_hint: str = "") -> list[str]:

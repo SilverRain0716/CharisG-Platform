@@ -41,23 +41,24 @@ def _offer_progress_cb(phase, current, total, message):
 @router.post("/match/single/{product_id}")
 def match_single(product_id: int, market: str = Query(default="US"), user=Depends(current_user)):
     try:
-        best = asin_matching_service.find_best_match(product_id)
-        candidates = asin_matching_service.get_candidates(product_id)
+        best = asin_matching_service.find_best_match(product_id, market=market)
+        candidates = asin_matching_service.get_candidates(product_id, market=market)
         return {"product_id": product_id, "market": market, "best_match": best, "candidates": candidates}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
-def _run_batch_match_bg(limit, min_sort_score):
+def _run_batch_match_bg(limit, min_sort_score, market):
     with _match_lock:
         _match_state.update({
             "running": True, "phase": "match", "current": 0, "total": 0,
-            "message": "시작 중", "started_at": datetime.utcnow().isoformat(),
+            "message": f"[{market}] 시작 중", "started_at": datetime.utcnow().isoformat(),
             "finished_at": None, "error": None, "result": None,
         })
     try:
         result = asin_matching_service.batch_match(
-            limit=limit, min_sort_score=min_sort_score, progress_cb=_match_progress_cb,
+            limit=limit, min_sort_score=min_sort_score, market=market,
+            progress_cb=_match_progress_cb,
         )
         with _match_lock:
             _match_state.update({
@@ -78,7 +79,7 @@ def match_batch(background: BackgroundTasks, limit: int = 50,
     with _match_lock:
         if _match_state["running"]:
             raise HTTPException(status_code=409, detail="매칭 작업 진행 중")
-    background.add_task(_run_batch_match_bg, limit, min_sort_score)
+    background.add_task(_run_batch_match_bg, limit, min_sort_score, market)
     return {"status": "started", "limit": limit, "market": market}
 
 
@@ -90,13 +91,14 @@ def match_progress(user=Depends(current_user)):
 
 @router.get("/match/candidates/{product_id}")
 def get_candidates(product_id: int, market: str = Query(default="US"), user=Depends(current_user)):
-    candidates = asin_matching_service.get_candidates(product_id)
+    candidates = asin_matching_service.get_candidates(product_id, market=market)
     return {"product_id": product_id, "market": market, "candidates": candidates}
 
 
 @router.post("/match/select/{product_id}/{asin}")
-def select_match(product_id: int, asin: str, user=Depends(current_user)):
-    return asin_matching_service.select_asin(product_id, asin)
+def select_match(product_id: int, asin: str, market: str = Query(default="US"),
+                 user=Depends(current_user)):
+    return asin_matching_service.select_asin(product_id, asin, market=market)
 
 
 # ── Offer 등록 ───────────────────────────────────────
@@ -162,4 +164,4 @@ def offer_progress(user=Depends(current_user)):
 
 @router.get("/summary")
 def pipeline_summary(market: str = Query(default="US"), user=Depends(current_user)):
-    return asin_matching_service.get_pipeline_summary()
+    return asin_matching_service.get_pipeline_summary(market=market)

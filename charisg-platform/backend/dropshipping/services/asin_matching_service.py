@@ -22,15 +22,15 @@ from backend.dropshipping.database import get_db
 from backend.dropshipping.services.amazon_sp_api_service import (
     get_credentials,
     get_marketplace,
+    get_marketplace_for,
 )
+from backend.dropshipping.services.marketplace_config import get_config
 from backend_shared.utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
 # CatalogItems: 2 req/sec = 120 RPM → 110 안전선
 _catalog_limiter = RateLimiter(max_per_minute=110, name="catalog_items")
-
-MARKETPLACE_ID = "ATVPDKIKX0DER"
 
 # 매칭 임계값
 MATCH_THRESHOLD_STRONG = 0.55
@@ -212,31 +212,52 @@ def _price_compatibility(
     return 0.0       # 역마진
 
 
-# ── CatalogItems 클라이언트 (싱글턴) ─────────────────
+# ── CatalogItems 클라이언트 (마켓별 캐시) ────────────
 
 
-@lru_cache(maxsize=1)
-def _get_catalog_client() -> CatalogItems:
-    """CatalogItems 클라이언트 싱글턴."""
-    return CatalogItems(credentials=get_credentials(), marketplace=get_marketplace())
+_catalog_clients: dict[str, CatalogItems] = {}
 
 
-def _search_catalog(keywords: str, page_size: int = 10) -> list[dict]:
-    """CatalogItems API 검색."""
+def _get_catalog_client(market: str = "US") -> CatalogItems:
+    """마켓별 CatalogItems 클라이언트. NA 통합 계정이므로 크레덴셜은 동일."""
+    if market not in _catalog_clients:
+        cfg = get_config(market)
+        mp = get_marketplace_for(cfg["marketplace_id"])
+        _catalog_clients[market] = CatalogItems(
+            credentials=get_credentials(), marketplace=mp,
+        )
+    return _catalog_clients[market]
+
+
+def _clear_catalog_client(market: str = "US"):
+    """클라이언트 캐시 초기화 (토큰 만료 등)."""
+    _catalog_clients.pop(market, None)
+
+
+def _get_restricted_phrases(market: str = "US") -> list[str]:
+    """마켓별 제한 카테고리 구문 로드."""
+    cfg = get_config(market)
+    return cfg.get("restricted_phrases", _RESTRICTED_CATEGORY_PHRASES)
+
+
+def _search_catalog(keywords: str, market: str = "US", page_size: int = 10) -> list[dict]:
+    """CatalogItems API 검색 (마켓별)."""
     _catalog_limiter.wait()
-    client = _get_catalog_client()
+    cfg = get_config(market)
+    marketplace_id = cfg["marketplace_id"]
+    client = _get_catalog_client(market)
+    restricted = _get_restricted_phrases(market)
 
     try:
         resp = client.search_catalog_items(
             keywords=keywords,
-            marketplaceIds=[MARKETPLACE_ID],
+            marketplaceIds=[marketplace_id],
             includedData="summaries",
             pageSize=page_size,
         )
     except Exception as e:
-        logger.error(f"CatalogItems 검색 실패: {e}")
-        # 클라이언트 캐시 초기화 (토큰 만료 등)
-        _get_catalog_client.cache_clear()
+        logger.error(f"CatalogItems [{market}] 검색 실패: {e}")
+        _clear_catalog_client(market)
         return []
 
     items = resp.payload.get("items", [])
@@ -252,11 +273,12 @@ def _search_catalog(keywords: str, page_size: int = 10) -> list[dict]:
         brand = s.get("brand", "")
         title = s.get("itemName", "")
 
-        # v3: 브랜드/카테고리 사전 필터
+        # v3: 브랜드/카테고리 사전 필터 (마켓별 제한 목록)
         if _is_brand_restricted(brand):
             filtered_brand += 1
             continue
-        if _is_category_restricted(title):
+        title_lower = title.lower()
+        if any(phrase in title_lower for phrase in restricted):
             filtered_cat += 1
             continue
 
@@ -267,7 +289,7 @@ def _search_catalog(keywords: str, page_size: int = 10) -> list[dict]:
         })
 
     logger.info(
-        f"CatalogItems '{keywords[:50]}' → {len(results)}건 "
+        f"CatalogItems [{market}] '{keywords[:50]}' → {len(results)}건 "
         f"(브랜드 제외 {filtered_brand}, 카테고리 제외 {filtered_cat})"
     )
     return results
@@ -332,7 +354,7 @@ def _score_candidate(product: dict, candidate: dict, agg_price: Optional[float])
 # ── 다중 검색 전략 ──────────────────────────────────
 
 
-def _multi_search(product_name: str) -> list[dict]:
+def _multi_search(product_name: str, market: str = "US") -> list[dict]:
     """다중 키워드 전략으로 검색, 중복 제거.
 
     1차: 핵심 6단어 검색
@@ -342,13 +364,13 @@ def _multi_search(product_name: str) -> list[dict]:
     if not kw_full:
         return []
 
-    results = _search_catalog(kw_full)
+    results = _search_catalog(kw_full, market=market)
 
     # 1차 결과가 3건 미만이면 짧은 키워드로 재검색
     if len(results) < 3:
         kw_short = _extract_keywords_short(product_name)
         if kw_short and kw_short != kw_full:
-            extra = _search_catalog(kw_short)
+            extra = _search_catalog(kw_short, market=market)
             seen = {r["asin"] for r in results}
             for e in extra:
                 if e["asin"] not in seen:
@@ -361,8 +383,8 @@ def _multi_search(product_name: str) -> list[dict]:
 # ── 단일 상품 매칭 ───────────────────────────────────
 
 
-def search_asin_candidates(product_id: int) -> list[dict]:
-    """product_id → CatalogItems 검색 → 후보 목록 반환 + DB 저장."""
+def search_asin_candidates(product_id: int, market: str = "US") -> list[dict]:
+    """product_id → CatalogItems 검색 → 후보 목록 반환 + DB 저장 (마켓별)."""
     with get_db() as conn:
         row = conn.execute(
             """SELECT product_name, source_price, calculated_price,
@@ -375,10 +397,12 @@ def search_asin_candidates(product_id: int) -> list[dict]:
         raise ValueError(f"상품 ID {product_id} 없음")
 
     product = dict(row)
+    restricted = _get_restricted_phrases(market)
 
-    # v3: CJ 상품 자체가 제한 카테고리면 매칭 스킵
-    if _is_category_restricted(product["product_name"]):
-        logger.info(f"상품 {product_id} 제한 카테고리 스킵: {product['product_name'][:50]}")
+    # v3: CJ 상품 자체가 제한 카테고리면 매칭 스킵 (마켓별 제한 목록)
+    pname_lower = product["product_name"].lower()
+    if any(phrase in pname_lower for phrase in restricted):
+        logger.info(f"[{market}] 상품 {product_id} 제한 카테고리 스킵: {product['product_name'][:50]}")
         return []
 
     # Amazon 중위가 조회 (search_keyword 또는 category 기반)
@@ -386,31 +410,32 @@ def search_asin_candidates(product_id: int) -> list[dict]:
     if not agg_price:
         agg_price = _get_agg_price(product.get("category") or "")
 
-    candidates_raw = _multi_search(product["product_name"])
+    candidates_raw = _multi_search(product["product_name"], market=market)
     if not candidates_raw:
         return []
 
     scored = [_score_candidate(product, c, agg_price) for c in candidates_raw]
     scored.sort(key=lambda x: -x["match_score"])
 
-    # DB 배치 저장
+    # DB 배치 저장 (마켓별 분리)
     with get_db() as conn:
         conn.executemany(
             """INSERT OR REPLACE INTO asin_match_candidates
                (product_id, asin, amazon_title, amazon_brand, amazon_price,
-                title_sim, price_compat, match_score, match_verdict, selected)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                title_sim, price_compat, match_score, match_verdict, selected,
+                marketplace)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
             [(product_id, s["asin"], s["amazon_title"], s["amazon_brand"],
               s["amazon_price"], s["title_sim"], s["price_compat"],
-              s["match_score"], s["match_verdict"]) for s in scored],
+              s["match_score"], s["match_verdict"], market) for s in scored],
         )
 
     return scored
 
 
-def find_best_match(product_id: int) -> Optional[dict]:
-    """상품 → ASIN 검색 → 최적 매칭 반환 + matched_asin 업데이트."""
-    candidates = search_asin_candidates(product_id)
+def find_best_match(product_id: int, market: str = "US") -> Optional[dict]:
+    """상품 → ASIN 검색 → 최적 매칭 반환 + matched_asin 업데이트 (마켓별)."""
+    candidates = search_asin_candidates(product_id, market=market)
     if not candidates:
         return None
 
@@ -421,38 +446,42 @@ def find_best_match(product_id: int) -> Optional[dict]:
     with get_db() as conn:
         conn.execute(
             "UPDATE asin_match_candidates SET selected = 1 "
-            "WHERE product_id = ? AND asin = ?",
-            (product_id, best["asin"]),
+            "WHERE product_id = ? AND asin = ? AND marketplace = ?",
+            (product_id, best["asin"], market),
         )
-        conn.execute(
-            "UPDATE collected_products SET matched_asin = ? WHERE id = ?",
-            (best["asin"], product_id),
-        )
+        # matched_asin은 US 매칭 시에만 기본값으로 업데이트 (공유 카탈로그)
+        if market == "US":
+            conn.execute(
+                "UPDATE collected_products SET matched_asin = ? WHERE id = ?",
+                (best["asin"], product_id),
+            )
 
     logger.info(
-        f"상품 {product_id} → {best['asin']} "
+        f"[{market}] 상품 {product_id} → {best['asin']} "
         f"({best['match_verdict']}, score={best['match_score']:.3f})"
     )
     return best
 
 
-def select_asin(product_id: int, asin: str) -> dict:
-    """수동으로 ASIN 선택/변경."""
+def select_asin(product_id: int, asin: str, market: str = "US") -> dict:
+    """수동으로 ASIN 선택/변경 (마켓별)."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE asin_match_candidates SET selected = 0 WHERE product_id = ?",
-            (product_id,),
+            "UPDATE asin_match_candidates SET selected = 0 "
+            "WHERE product_id = ? AND marketplace = ?",
+            (product_id, market),
         )
         conn.execute(
             "UPDATE asin_match_candidates SET selected = 1 "
-            "WHERE product_id = ? AND asin = ?",
-            (product_id, asin),
+            "WHERE product_id = ? AND asin = ? AND marketplace = ?",
+            (product_id, asin, market),
         )
-        conn.execute(
-            "UPDATE collected_products SET matched_asin = ? WHERE id = ?",
-            (asin, product_id),
-        )
-    return {"product_id": product_id, "asin": asin, "status": "selected"}
+        if market == "US":
+            conn.execute(
+                "UPDATE collected_products SET matched_asin = ? WHERE id = ?",
+                (asin, product_id),
+            )
+    return {"product_id": product_id, "asin": asin, "market": market, "status": "selected"}
 
 
 # ── 일괄 매칭 ────────────────────────────────────────
@@ -461,20 +490,29 @@ def select_asin(product_id: int, asin: str) -> dict:
 def batch_match(
     limit: int = 50,
     min_sort_score: float = 0.0,
+    market: str = "US",
     progress_cb=None,
 ) -> dict:
-    """미매칭 상품 일괄 ASIN 매칭."""
+    """미매칭 상품 일괄 ASIN 매칭 (마켓별).
+
+    collected_products는 공유 카탈로그이므로 hard_filter_pass 기준으로 후보 선정.
+    마켓별로 별도 ASIN 매칭 결과가 asin_match_candidates에 저장됨.
+    """
     with get_db() as conn:
+        # 해당 마켓에서 아직 매칭 안 된 상품 조회
         rows = conn.execute(
-            """SELECT id, product_name, source_price, calculated_price,
-                      amazon_category, category, sort_score
-               FROM collected_products
-               WHERE hard_filter_pass = 1
-                 AND (matched_asin IS NULL OR matched_asin = '')
-                 AND (sort_score >= ? OR sort_score IS NULL)
-               ORDER BY sort_score DESC
+            """SELECT cp.id, cp.product_name, cp.source_price, cp.calculated_price,
+                      cp.amazon_category, cp.category, cp.sort_score
+               FROM collected_products cp
+               WHERE cp.hard_filter_pass = 1
+                 AND NOT EXISTS (
+                     SELECT 1 FROM asin_match_candidates amc
+                     WHERE amc.product_id = cp.id AND amc.marketplace = ?
+                 )
+                 AND (cp.sort_score >= ? OR cp.sort_score IS NULL)
+               ORDER BY cp.sort_score DESC
                LIMIT ?""",
-            (min_sort_score, limit),
+            (market, min_sort_score, limit),
         ).fetchall()
 
     total = len(rows)
@@ -485,10 +523,10 @@ def batch_match(
     for i, row in enumerate(rows):
         pid = row["id"]
         if progress_cb:
-            progress_cb("match", i + 1, total, f"매칭 중: {row['product_name'][:40]}")
+            progress_cb("match", i + 1, total, f"[{market}] 매칭 중: {row['product_name'][:40]}")
 
         try:
-            best = find_best_match(pid)
+            best = find_best_match(pid, market=market)
             if best:
                 matched += 1
                 results.append({"product_id": pid, **best})
@@ -496,7 +534,7 @@ def batch_match(
                 results.append({"product_id": pid, "asin": None, "match_verdict": "no_match"})
         except Exception as e:
             failed += 1
-            logger.error(f"상품 {pid} 매칭 실패: {e}")
+            logger.error(f"[{market}] 상품 {pid} 매칭 실패: {e}")
             results.append({"product_id": pid, "error": str(e)})
 
     return {
@@ -504,45 +542,51 @@ def batch_match(
         "matched": matched,
         "no_match": total - matched - failed,
         "failed": failed,
+        "market": market,
         "results": results,
     }
 
 
-def get_candidates(product_id: int) -> list[dict]:
-    """상품의 ASIN 매칭 후보 목록 조회."""
+def get_candidates(product_id: int, market: str = "US") -> list[dict]:
+    """상품의 ASIN 매칭 후보 목록 조회 (마켓별)."""
     with get_db() as conn:
         rows = conn.execute(
             """SELECT asin, amazon_title, amazon_brand, amazon_price,
                       title_sim, price_compat, match_score, match_verdict,
                       selected, searched_at
                FROM asin_match_candidates
-               WHERE product_id = ?
+               WHERE product_id = ? AND marketplace = ?
                ORDER BY match_score DESC""",
-            (product_id,),
+            (product_id, market),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_pipeline_summary() -> dict:
-    """ASIN 매칭 파이프라인 현황."""
+def get_pipeline_summary(market: str = "US") -> dict:
+    """ASIN 매칭 파이프라인 현황 (마켓별)."""
     with get_db() as conn:
         total = conn.execute(
             "SELECT COUNT(*) FROM collected_products WHERE hard_filter_pass = 1"
         ).fetchone()[0]
+        # 해당 마켓에서 매칭된 상품 수
         matched = conn.execute(
-            "SELECT COUNT(*) FROM collected_products "
-            "WHERE hard_filter_pass = 1 AND matched_asin IS NOT NULL AND matched_asin != ''"
+            """SELECT COUNT(DISTINCT product_id) FROM asin_match_candidates
+               WHERE marketplace = ? AND selected = 1""",
+            (market,),
         ).fetchone()[0]
         listed = conn.execute(
-            "SELECT COUNT(*) FROM listings WHERE asin IS NOT NULL AND asin != ''"
+            "SELECT COUNT(*) FROM listings WHERE marketplace = ? AND asin IS NOT NULL AND asin != ''",
+            (market,),
         ).fetchone()[0]
         active = conn.execute(
-            "SELECT COUNT(*) FROM listings WHERE status = 'active'"
+            "SELECT COUNT(*) FROM listings WHERE marketplace = ? AND status = 'active'",
+            (market,),
         ).fetchone()[0]
         # 매칭 품질 분포
         verdicts = conn.execute(
             """SELECT match_verdict, COUNT(*) FROM asin_match_candidates
-               WHERE selected = 1 GROUP BY match_verdict"""
+               WHERE selected = 1 AND marketplace = ? GROUP BY match_verdict""",
+            (market,),
         ).fetchall()
 
     return {
@@ -551,5 +595,6 @@ def get_pipeline_summary() -> dict:
         "unmatched": total - matched,
         "listed": listed,
         "active": active,
+        "market": market,
         "match_quality": {r[0]: r[1] for r in verdicts},
     }

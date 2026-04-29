@@ -8,6 +8,8 @@ from pathlib import Path
 
 # AI
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+# Fallback 키 (무료 등급 등) — 주 키 quota 초과 시 _call_gemini 가 자동 swap
+GEMINI_API_KEY_FALLBACK = os.environ.get("GEMINI_API_KEY_FALLBACK", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "gemini")
 
