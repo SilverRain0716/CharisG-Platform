@@ -650,3 +650,100 @@ def request_approval_status(job_id: str, user: dict = Depends(current_user)):
         raise HTTPException(404, "job 없음")
     pct = round(((job["processed"] + job["errors"]) / job["total"]) * 100, 1) if job["total"] else 0
     return {**job, "pct": pct}
+
+
+# ── 쿠팡 위너 모니터링 ──────────────────────────────────────
+from backend.purchase.services import coupang_winner
+
+
+@router.post("/winner/evaluate-all")
+def winner_evaluate_all(user: dict = Depends(current_user)):
+    """전체 listed 상품 위너 상태 재평가 (수동 트리거).
+    각 상품에 대해 등록 경과일 + 최근 30일 주문 카운트로 winner_status 산정.
+    """
+    result = coupang_winner.evaluate_all_listings(channel='coupang')
+    return result
+
+
+@router.get("/winner/summary")
+def winner_summary(user: dict = Depends(current_user)):
+    """위너 상태 요약 (채널별 카운트)."""
+    return coupang_winner.get_summary(channel='coupang')
+
+
+@router.get("/winner/non-winners")
+def winner_non_winners(limit: int = 100, user: dict = Depends(current_user)):
+    """비위너 의심 (suspect_loser) 리스트 — 가격 조정/정리 후보."""
+    items = coupang_winner.get_non_winners(channel='coupang', limit=limit)
+    return {'count': len(items), 'items': items}
+
+
+# ── 쿠팡 셀러 상태 동기화 ────────────────────────────────────
+from backend.purchase.services import coupang_status_sync
+
+
+@router.post("/status/sync-all")
+def status_sync_all(only_unchecked_days: int = None, user: dict = Depends(current_user)):
+    """전체 listed 쿠팡 상품의 셀러 상태 동기화 (rate limit 0.55s/건, ~17분)."""
+    return coupang_status_sync.sync_all(only_unchecked_days=only_unchecked_days)
+
+
+@router.get("/status/summary")
+def status_summary(user: dict = Depends(current_user)):
+    """쿠팡 status별 카운트 (승인완료/승인반려/거래정지 등)."""
+    return coupang_status_sync.get_status_summary()
+
+
+@router.get("/status/rejected")
+def status_rejected(limit: int = 200, user: dict = Depends(current_user)):
+    """반려/거래정지 상품 리스트 (REJECTED/BLOCKED/PARTIAL_APPROVED)."""
+    items = coupang_status_sync.get_rejected(limit=limit)
+    return {'count': len(items), 'items': items}
+
+
+# ── 쿠팡 셀러상품 카운트 (API 직접 조회, 1시간 캐시) ──────────
+_PRODUCT_COUNT_CACHE_KEY = "coupang.product_count_cache"
+_PRODUCT_COUNT_TTL_SEC = 3600
+
+
+@router.get("/seller-products/count")
+def seller_products_count(refresh: bool = False, user: dict = Depends(current_user)):
+    """쿠팡 측 실제 등록 상품 수 (API 페이징 전수 조회).
+
+    DB 의 listings_pa 카운트와 별개로 쿠팡 서버 기준의 실측 카운트.
+    호출 비용이 커서(1900건 ~20초) settings 테이블에 1시간 캐시.
+    refresh=true 면 캐시 무시하고 강제 재조회.
+    """
+    from backend.purchase.services.coupang_service import count_seller_products_by_status
+    now = datetime.now(timezone.utc)
+
+    if not refresh:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key=?",
+                (_PRODUCT_COUNT_CACHE_KEY,),
+            ).fetchone()
+        if row and row["value"]:
+            try:
+                cached = json.loads(row["value"])
+                fetched_at = datetime.strptime(
+                    cached["fetched_at"], "%Y-%m-%dT%H:%M:%SZ"
+                ).replace(tzinfo=timezone.utc)
+                age = (now - fetched_at).total_seconds()
+                if age < _PRODUCT_COUNT_TTL_SEC:
+                    cached["cached"] = True
+                    cached["age_sec"] = int(age)
+                    return cached
+            except Exception:
+                pass
+
+    result = count_seller_products_by_status()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO settings (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            (_PRODUCT_COUNT_CACHE_KEY, json.dumps(result, ensure_ascii=False)),
+        )
+    result["cached"] = False
+    result["age_sec"] = 0
+    return result

@@ -52,6 +52,7 @@ ORDER_STEPS = [
     ("international",    "국제 배송"),
     ("domestic",         "국내 배송"),
     ("completed",        "완료"),
+    ("cancelled",        "취소"),
 ]
 
 

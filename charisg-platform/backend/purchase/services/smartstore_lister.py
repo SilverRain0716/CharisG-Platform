@@ -13,6 +13,7 @@ import re
 from typing import Optional
 
 from backend.purchase.database import get_db
+from backend.purchase.services import clean_policy
 from backend.purchase.services.naver_commerce_service import register_product, upload_image, upload_images_batch
 
 logger = logging.getLogger(__name__)
@@ -267,6 +268,8 @@ def build_payload(product_id: int, image_urls: list[str] | None = None) -> Optio
 
     raw_name = (p["title_ko"] or p["title_en"] or "").strip()
     name = _clean_product_name(raw_name)
+    # ── [해외] 태그 자동 부여 (구매대행 표기) ──
+    name = clean_policy.ensure_overseas_tag(name, max_len=50)
     price = int(listing["sale_krw"]) if listing and listing["sale_krw"] else int(p["sale_price_krw"] or 0)
     category = p["category_path"] or ""
     desc_html = detail["html_content"] if detail and detail["html_content"] else ""
@@ -419,6 +422,74 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
     if existing and existing["channel_product_id"]:
         return {"ok": False, "skip": True,
                 "error": f"이미 등록됨 (channel_product_id={existing['channel_product_id']})"}
+
+    # ── 클린 정책 검사 (중복 ASIN + 금지 성분) ──
+    with get_db() as conn:
+        prow = conn.execute(
+            "SELECT asin, title_en, title_ko, category_path FROM products WHERE id=?",
+            (product_id,),
+        ).fetchone()
+    if prow:
+        # 1) 중복 ASIN
+        asin = prow["asin"]
+        if asin:
+            is_dup, dup_info = clean_policy.check_duplicate_asin(asin, channel='smartstore', exclude_product_id=product_id)
+            if is_dup:
+                reason = f"중복 ASIN — 이미 listed (product_id={dup_info['product_id']}, cpid={dup_info['channel_product_id']})"
+                with get_db() as conn:
+                    conn.execute(
+                        """UPDATE listings_pa SET status='excluded',
+                           error_message=?, last_synced_at=CURRENT_TIMESTAMP
+                           WHERE product_id=? AND channel='smartstore'""",
+                        (reason, product_id),
+                    )
+                clean_policy.log_violation(
+                    stage='upload_smartstore', violation_type='duplicate_asin',
+                    action_taken='excluded', asin=asin,
+                    product_id=product_id, channel='smartstore',
+                    notes=f'기존 listed product_id={dup_info["product_id"]}',
+                )
+                return {"ok": False, "skip": True, "error": reason}
+
+        # 2) 금지 성분
+        blocked_ing, ing = clean_policy.check_prohibited_ingredients(
+            prow["title_en"] or "", prow["title_ko"] or "",
+        )
+        if blocked_ing:
+            reason = f"금지 성분 차단 ({ing}) — 국내 의약품 분류 또는 수입금지"
+            with get_db() as conn:
+                conn.execute(
+                    """UPDATE listings_pa SET status='excluded',
+                       error_message=?, last_synced_at=CURRENT_TIMESTAMP
+                       WHERE product_id=? AND channel='smartstore'""",
+                    (reason, product_id),
+                )
+            clean_policy.log_violation(
+                stage='upload_smartstore', violation_type='prohibited_ingredient',
+                action_taken='excluded', matched_keyword=ing,
+                product_id=product_id, channel='smartstore',
+                original_text=prow['title_en'],
+            )
+            return {"ok": False, "skip": True, "error": reason}
+
+        # 3) 취급불가 카테고리
+        blocked_cat, cat_kw = clean_policy.check_prohibited_category(prow["category_path"] or "")
+        if blocked_cat:
+            reason = f"취급불가 카테고리 ({cat_kw})"
+            with get_db() as conn:
+                conn.execute(
+                    """UPDATE listings_pa SET status='excluded',
+                       error_message=?, last_synced_at=CURRENT_TIMESTAMP
+                       WHERE product_id=? AND channel='smartstore'""",
+                    (reason, product_id),
+                )
+            clean_policy.log_violation(
+                stage='upload_smartstore', violation_type='prohibited_category',
+                action_taken='excluded', matched_keyword=cat_kw,
+                product_id=product_id, channel='smartstore',
+                original_text=prow['category_path'],
+            )
+            return {"ok": False, "skip": True, "error": reason}
 
     payload = build_payload(product_id, image_urls=image_urls)
     if not payload:

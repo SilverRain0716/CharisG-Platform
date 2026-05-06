@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from backend.purchase.database import get_db
+from backend.purchase.services import clean_policy
 from backend.purchase.services.image_downloader import download_product_images, fetch_amazon_images
 from backend.purchase.services.category_rag import resolve_category
 from backend_shared.ai import translate_text, generate_seo
@@ -371,6 +372,28 @@ async def process_product(product_id: int, platform: str = "smartstore", force: 
 
     mapped_category = existing_cat if cat_result is None else (cat_result.get("mapped_category") or existing_cat)
 
+    # ── 효능 표현 정제 (건강식품 카테고리만) ──
+    if clean_policy.is_health_food_category(mapped_category):
+        before_title = title_ko
+        before_seo = seo_title
+        before_desc = description_ko
+        title_ko = clean_policy.sanitize_efficacy_claims(title_ko)
+        seo_title = clean_policy.sanitize_efficacy_claims(seo_title)
+        if description_ko:
+            description_ko = clean_policy.sanitize_efficacy_claims(description_ko)
+        if title_ko != before_title:
+            clean_policy.log_violation(
+                stage='ai', violation_type='efficacy_claim', action_taken='sanitized',
+                product_id=product_id, channel=None,
+                original_text=before_title, notes=f'title_ko 정제: "{before_title}" → "{title_ko}"',
+            )
+        if seo_title != before_seo:
+            clean_policy.log_violation(
+                stage='ai', violation_type='efficacy_claim', action_taken='sanitized',
+                product_id=product_id, channel=None,
+                original_text=before_seo, notes=f'seo_title 정제',
+            )
+
     # 4. HTML 생성 (PA 전용 템플릿)
     image_urls = img_result.get("local_urls") or []
     html = _build_pa_html(image_urls)
@@ -620,6 +643,20 @@ async def process_product_ai_only(product_id: int, platform: str = "smartstore",
     mapped_category = existing_cat if cat_result is None else (
         cat_result.get("mapped_category") or existing_cat
     )
+
+    # ── 효능 표현 정제 (건강식품 카테고리만) ──
+    if clean_policy.is_health_food_category(mapped_category):
+        before_t = title_ko
+        title_ko = clean_policy.sanitize_efficacy_claims(title_ko)
+        seo_title = clean_policy.sanitize_efficacy_claims(seo_title)
+        if description_ko:
+            description_ko = clean_policy.sanitize_efficacy_claims(description_ko)
+        if title_ko != before_t:
+            clean_policy.log_violation(
+                stage='ai', violation_type='efficacy_claim', action_taken='sanitized',
+                product_id=product_id, original_text=before_t,
+                notes='ai_only title_ko 정제',
+            )
 
     # products UPDATE — ai_processed_at 도 설정
     with get_db() as conn:

@@ -400,6 +400,12 @@ def normalize_catalog_item(asin: str, item: dict, marketplace: str = "US") -> di
         "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     out.update(_extract_from_summaries(item.get("summaries") or []))
+    # productType 추출 (도서/미디어 필터링용)
+    pts = item.get("productTypes") or []
+    if pts and isinstance(pts, list):
+        first = pts[0] if isinstance(pts[0], dict) else None
+        if first and first.get("productType"):
+            out["product_type"] = first["productType"]
     out.update(_extract_dimensions(item.get("dimensions") or []))
     out.update(_extract_from_attributes(item.get("attributes") or {}))
     out.update(_extract_from_relationships(item.get("relationships") or []))

@@ -22,10 +22,10 @@ from backend.purchase.routers import (
     summary, dashboard, datalab, discovery, searchad, keywords, sourcing, margin,
     customs, competition, pa_products, detail_page, smartstore, smartstore_attributes, coupang,
     orders, tracking, cs, returns, pa_monitor, pa_settings, exchange_rate, pricing,
-    groups, category_mapping,
+    groups, category_mapping, kr_shipping, forwarder_pricing,
 )
 from backend.purchase.services import (
-    coupang_order_poller, image_cleanup_poller, smartstore_order_poller,
+    coupang_order_poller, coupang_return_poller, image_cleanup_poller, smartstore_order_poller,
     sheet_queue_worker,
 )
 from backend_shared.context import register_db_factory
@@ -43,6 +43,11 @@ async def lifespan(app: FastAPI):
     if os.environ.get("PA_DISABLE_COUPANG_ORDER_POLLER") != "1":
         poller_task = asyncio.create_task(coupang_order_poller.run_forever())
         logger.info("쿠팡 주문 폴러 기동 (interval=%ds)", coupang_order_poller.POLL_INTERVAL_SEC)
+    # 쿠팡 반품/취소 30분 폴링 태스크.
+    return_poller_task: asyncio.Task | None = None
+    if os.environ.get("PA_DISABLE_COUPANG_RETURN_POLLER") != "1":
+        return_poller_task = asyncio.create_task(coupang_return_poller.run_forever())
+        logger.info("쿠팡 반품/취소 폴러 기동 (interval=%ds)", coupang_return_poller.POLL_INTERVAL_SEC)
     # 네이버(스마트스토어) 주문 1시간 폴링 태스크.
     smartstore_poller_task: asyncio.Task | None = None
     if os.environ.get("PA_DISABLE_SMARTSTORE_ORDER_POLLER") != "1":
@@ -62,7 +67,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        for t in (poller_task, smartstore_poller_task, cleanup_task, sheet_worker_task):
+        for t in (poller_task, return_poller_task, smartstore_poller_task, cleanup_task, sheet_worker_task):
             if t:
                 t.cancel()
                 try:
@@ -87,11 +92,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 24 routers
+# 26 routers
 for r in (summary, dashboard, datalab, discovery, searchad, keywords, sourcing, margin,
           customs, competition, pa_products, detail_page, smartstore, smartstore_attributes, coupang,
           orders, tracking, cs, returns, pa_monitor, pa_settings, exchange_rate, pricing,
-          groups, category_mapping):
+          groups, category_mapping, kr_shipping, forwarder_pricing):
     app.include_router(r.router)
 
 # 이미지 정적 파일 서빙 — /api/pa/images/products/{id}/img_000.jpg

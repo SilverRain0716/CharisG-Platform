@@ -66,7 +66,13 @@ def _record_job(
 
 
 async def _poll_once() -> None:
-    """1회 폴링. 예외는 내부에서 흡수해 루프 지속성 보장."""
+    """1회 폴링. 예외는 내부에서 흡수해 루프 지속성 보장.
+
+    sync_orders 성공 시 audit log(_record_job) 보다 번역 task / 알림 큐잉을 먼저
+    수행한다. _record_job 은 단순 audit 이지만 SQLite 락 경합으로 실패할 수 있고,
+    같은 try 블록에 두면 INSERT 된 신규 주문이 번역 큐에 못 들어가는 사고가 난다
+    (쿠팡 폴러 2026-05-03 우혜경 주문 67번 사고와 동일 패턴).
+    """
     now = datetime.now(tz=KST)
     start_dt = now - timedelta(hours=POLL_WINDOW_HOURS)
     start = _format_kst_iso(start_dt)
@@ -77,29 +83,39 @@ async def _poll_once() -> None:
         result = await asyncio.to_thread(
             sync_orders, start, end, "PAYED"
         )
-        _record_job(job_id, start, end, result, status="done")
-        logger.info(
-            "[smartstore-order-poller] %s ~ %s — 조회=%d 신규=%d 중복=%d 매핑실패=%d 에러=%d",
-            start, end,
-            result.get("fetched", 0),
-            result.get("inserted", 0),
-            result.get("duplicated", 0),
-            result.get("unmapped", 0),
-            result.get("errors", 0),
-        )
-        # 신규 주문은 백그라운드 번역 큐에 투입 + Discord 알림
-        new_oids = result.get("new_order_ids", [])
-        if new_oids:
-            asyncio.create_task(_notify_new_orders(new_oids))
-        for new_oid in new_oids:
-            asyncio.create_task(_translate_safely(new_oid))
     except Exception as e:
-        logger.exception("[smartstore-order-poller] 예외")
-        _record_job(
-            job_id, start, end,
-            {"fetched": 0, "inserted": 0, "errors": 1},
-            status="error", error=str(e)[:500],
-        )
+        logger.exception("[smartstore-order-poller] sync_orders 실패")
+        try:
+            _record_job(
+                job_id, start, end,
+                {"fetched": 0, "inserted": 0, "errors": 1},
+                status="error", error=str(e)[:500],
+            )
+        except Exception:
+            logger.exception("[smartstore-order-poller] _record_job 도 실패 (무시)")
+        return
+
+    # 신규 주문 번역/알림 큐잉을 audit log 보다 먼저 실행 — _record_job 실패가 누락을 일으키지 않게
+    new_oids = result.get("new_order_ids", [])
+    if new_oids:
+        asyncio.create_task(_notify_new_orders(new_oids))
+    for new_oid in new_oids:
+        asyncio.create_task(_translate_safely(new_oid))
+
+    logger.info(
+        "[smartstore-order-poller] %s ~ %s — 조회=%d 신규=%d 중복=%d 매핑실패=%d 에러=%d",
+        start, end,
+        result.get("fetched", 0),
+        result.get("inserted", 0),
+        result.get("duplicated", 0),
+        result.get("unmapped", 0),
+        result.get("errors", 0),
+    )
+
+    try:
+        _record_job(job_id, start, end, result, status="done")
+    except Exception:
+        logger.exception("[smartstore-order-poller] _record_job 실패 (audit 만 누락, 번역은 진행됨)")
 
 
 async def _translate_safely(order_id: int) -> None:

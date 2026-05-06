@@ -145,10 +145,18 @@ def init_db() -> None:
         (25, migrations_dir / "schema_pa_v25.sql", "product_keywords (N:M 키워드 매핑)"),
         (26, migrations_dir / "schema_pa_v26.sql", "listings_pa.coupang_auto_matched (B 안 차등 처리)"),
         (27, migrations_dir / "schema_pa_v27.sql", "sheet_queue (대량 import 자동 파이프라인)"),
+        (28, migrations_dir / "schema_pa_v28.sql", "sheet_queue.target_channels (채널 선택 업로드)"),
+        (29, migrations_dir / "schema_pa_v29.sql", "coupons + coupon_items (쿠팡 즉시할인쿠폰 발급/추적)"),
+        (31, migrations_dir / "schema_pa_v31.sql", "clean_violation_log: 클린 위반 이력 기록"),
+        (32, migrations_dir / "schema_pa_v32.sql", "listings_pa winner_status (쿠팡 위너 모니터링)"),
+        (33, migrations_dir / "schema_pa_v33.sql", "listings_pa coupang_seller_status (반려 동기화)"),
+        (34, migrations_dir / "schema_pa_v34.sql", "listings_pa kr_shipping_eligible + checked_at (한국 직배 검증 캐시)"),
+        (35, migrations_dir / "schema_pa_v35.sql", "listings_pa forwarder pricing 컬럼 (직배 불가 시 배대지 경유 가격 재산정)"),
     ])
 
     # hot.db — 별도 마이그레이션 (단일 schema 파일)
     hot_runner = MigrationRunner(str(DB_PATH_HOT))
     hot_runner.apply_all([
         (1, migrations_dir / "schema_pa_hot.sql", "hot.db: orders + cs + returns 분리"),
+        (2, migrations_dir / "schema_pa_v30.sql", "orders.cancel_* 컬럼 (쿠팡 반품/취소 sync)"),
     ])

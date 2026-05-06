@@ -216,17 +216,20 @@ async def _process_sheet(item: dict) -> None:
         _update(sid, error_message=f"detailing: {str(e)[:200]}")
 
     # ── 4. 채널 보내기 (listings_pa INSERT) ─────────────
-    _update(sid, status="channelsending", current_step="채널 보내기 중")
+    channels_csv = item.get("target_channels") or "smartstore,coupang"
+    channels = [c.strip() for c in channels_csv.split(",") if c.strip()]
+    _update(sid, status="channelsending",
+            current_step=f"채널 보내기 중 ({','.join(channels)})")
     try:
         from backend.purchase.services.channel_listing_service import send_to_channels
         sent = 0
         for pid in new_pids:
             try:
-                await asyncio.to_thread(send_to_channels, pid, ["smartstore", "coupang"])
+                await asyncio.to_thread(send_to_channels, pid, channels)
                 sent += 1
             except Exception as e:
                 logger.warning(f"[sheet-queue] sid={sid} pid={pid} send 실패: {e}")
-        _update(sid, current_step=f"채널 보내기 완료 — {sent}/{len(new_pids)}")
+        _update(sid, current_step=f"채널 보내기 완료 — {sent}/{len(new_pids)} ({','.join(channels)})")
     except Exception as e:
         logger.exception(f"[sheet-queue] sid={sid} channelsending 실패")
 

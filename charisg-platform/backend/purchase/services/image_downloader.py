@@ -17,6 +17,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
+from io import BytesIO
+from PIL import Image as _PIL_Image
 
 from backend.purchase.database import get_db
 
@@ -58,29 +60,198 @@ _PAT_SP_IMG_ID = re.compile(r'/I/([A-Za-z0-9+_%-]+?)(?:\._[^/]*)?\.jpg')
 
 
 def fetch_amazon_images_sp_api(asin: str, max_images: int = 15) -> list[str]:
-    """SP-API 이미지 URL 수집 — sp_api_facts 단일 호출 + 캐시 경유.
+    """SP-API Catalog Items로 이미지 URL 수집 (hiRes 우선).
 
-    같은 ASIN 에 대해 7일 내 재호출 0 (DB 캐시).
+    Returns: 이미지 URL 리스트 (최대 max_images개, 중복 제거, 큰 해상도 우선).
     """
     try:
-        from backend.purchase.services.sp_api_facts import get_image_urls
+        from sp_api.api import CatalogItems
+        from sp_api.base import Marketplaces
+        from backend.dropshipping.services.amazon_sp_api_service import get_credentials
     except ImportError:
-        logger.warning("sp_api_facts 모듈 없음 — SP-API 이미지 수집 불가")
+        logger.warning("sp_api 모듈 없음 — SP-API 이미지 수집 불가")
         return []
-    return get_image_urls(asin, max_images)
+
+    try:
+        creds = get_credentials()
+        catalog = CatalogItems(credentials=creds, marketplace=Marketplaces.US)
+        resp = catalog.get_catalog_item(
+            asin=asin,
+            includedData="images",
+            marketplaceIds=["ATVPDKIKX0DER"],
+        )
+        item = resp.payload
+        image_sets = item.get("images", [])
+        if not image_sets:
+            return []
+
+        # MAIN variant 우선
+        main_set = image_sets[0]
+        for s in image_sets:
+            if s.get("variant") == "MAIN":
+                main_set = s
+                break
+
+        raw_images = main_set.get("images", [])
+
+        # 이미지 ID별 가장 큰 해상도만 선택
+        best_by_id: dict[str, tuple[int, str]] = {}
+        for img in raw_images:
+            url = img.get("link", "")
+            w = img.get("width", 0)
+            h = img.get("height", 0)
+            area = w * h
+            m = _PAT_SP_IMG_ID.search(url)
+            img_id = m.group(1) if m else url
+            if img_id not in best_by_id or area > best_by_id[img_id][0]:
+                best_by_id[img_id] = (area, url)
+
+        sorted_imgs = sorted(best_by_id.values(), key=lambda x: -x[0])
+        result = [url for _, url in sorted_imgs[:max_images]]
+        logger.info(f"🔍 SP-API {asin}: {len(result)}장 이미지 수집")
+        return result
+
+    except Exception as e:
+        logger.warning(f"SP-API 이미지 수집 실패 ({asin}): {e}")
+        return []
 
 
 def fetch_product_info_sp_api(asin: str) -> dict:
-    """SP-API 상품 기본정보 — sp_api_facts 경유 (캐시 우선).
+    """SP-API로 상품 정보 수집.
 
-    Returns (기존 형식 유지): {title, brand, description, bullet_points, images}.
+    Returns dict with keys:
+      title, brand, description, bullet_points, images,
+      amazon_price_usd, dimensions, identifiers, classifications
+    실패 시 빈 dict.
     """
     try:
-        from backend.purchase.services.sp_api_facts import get_facts_for_promote
+        from sp_api.api import CatalogItems
+        from sp_api.base import Marketplaces
+        from backend.dropshipping.services.amazon_sp_api_service import get_credentials
     except ImportError:
         return {}
+
     try:
-        return get_facts_for_promote(asin)
+        creds = get_credentials()
+        catalog = CatalogItems(credentials=creds, marketplace=Marketplaces.US, version="2022-04-01")
+        resp = catalog.get_catalog_item(
+            asin=asin,
+            includedData="summaries,attributes,images,dimensions,identifiers,classifications",
+            marketplaceIds=["ATVPDKIKX0DER"],
+        )
+        item = resp.payload
+        result: dict = {}
+
+        # ── summaries → title, brand, amazon_price_usd ──
+        summaries = item.get("summaries", [])
+        if summaries:
+            s = summaries[0]
+            result["title"] = s.get("itemName", "")
+            result["brand"] = s.get("brand", "")
+
+        # ── attributes → description, bullet_point, list_price ──
+        attrs = item.get("attributes", {})
+        if attrs:
+            bullets = attrs.get("bullet_point", [])
+            if bullets:
+                result["bullet_points"] = [
+                    b.get("value", "") for b in bullets if b.get("value")
+                ]
+            descs = attrs.get("product_description", [])
+            if descs:
+                result["description"] = descs[0].get("value", "")
+            # 판매가: list_price (v2022-04-01: [{currency, value, marketplace_id}])
+            list_prices = attrs.get("list_price", [])
+            if list_prices:
+                lp = list_prices[0]
+                # v2022-04-01: value 가 바로 숫자 / v2020-12-01: value.amount
+                amt = lp.get("value")
+                if isinstance(amt, dict):
+                    amt = amt.get("amount")
+                if amt is not None:
+                    try:
+                        result["amazon_price_usd"] = float(amt)
+                    except (ValueError, TypeError):
+                        pass
+
+        # ── images ──
+        image_sets = item.get("images", [])
+        if image_sets:
+            main_set = image_sets[0]
+            for s in image_sets:
+                if s.get("variant") == "MAIN":
+                    main_set = s
+                    break
+            raw = main_set.get("images", [])
+            best_by_id: dict[str, tuple[int, str]] = {}
+            for img in raw:
+                url = img.get("link", "")
+                area = img.get("width", 0) * img.get("height", 0)
+                m = _PAT_SP_IMG_ID.search(url)
+                img_id = m.group(1) if m else url
+                if img_id not in best_by_id or area > best_by_id[img_id][0]:
+                    best_by_id[img_id] = (area, url)
+            sorted_imgs = sorted(best_by_id.values(), key=lambda x: -x[0])
+            result["images"] = [url for _, url in sorted_imgs[:15]]
+
+        # ── dimensions → {length, width, height, weight} ──
+        dim_sets = item.get("dimensions", [])
+        if dim_sets:
+            d = dim_sets[0]  # 첫 번째 marketplace 데이터
+            dims: dict = {}
+            pkg = d.get("package", {})
+            itm = d.get("item", {})
+            # item dimensions 우선, 없으면 package
+            src = itm if itm else pkg
+            for key in ("length", "width", "height"):
+                v = src.get(key)
+                if v:
+                    dims[key] = v.get("value")
+                    dims[f"{key}_unit"] = v.get("unit", "")
+            # weight: item weight 우선
+            w = itm.get("weight") or pkg.get("weight")
+            if w:
+                dims["weight"] = w.get("value")
+                dims["weight_unit"] = w.get("unit", "")
+            if dims:
+                result["dimensions"] = dims
+
+        # ── identifiers → [{type, value}, ...] ──
+        id_sets = item.get("identifiers", [])
+        if id_sets:
+            ids: list[dict] = []
+            for id_set in id_sets:
+                for ident in id_set.get("identifiers", []):
+                    id_type = ident.get("identifierType", "")
+                    id_val = ident.get("identifier", "")
+                    if id_type and id_val:
+                        ids.append({"type": id_type, "value": id_val})
+            if ids:
+                # 중복 제거 (type+value 기준)
+                seen = set()
+                unique_ids = []
+                for i in ids:
+                    k = (i["type"], i["value"])
+                    if k not in seen:
+                        seen.add(k)
+                        unique_ids.append(i)
+                result["identifiers"] = unique_ids
+
+        # ── classifications → [{nodeId, name, path}, ...] ──
+        cls_sets = item.get("classifications", [])
+        if cls_sets:
+            nodes: list[dict] = []
+            for cls in cls_sets:
+                for cat in cls.get("classifications", []):
+                    node_id = cat.get("classificationId", "")
+                    name = cat.get("displayName", "")
+                    if node_id or name:
+                        nodes.append({"nodeId": node_id, "name": name})
+            if nodes:
+                result["classifications"] = nodes
+
+        return result
+
     except Exception as e:
         logger.warning(f"SP-API 상품정보 수집 실패 ({asin}): {e}")
         return {}
@@ -224,7 +395,18 @@ async def download_product_images(product_id: int, images_json: str) -> dict:
 
             filename = f"img_{idx:03d}.jpg"
             file_path = product_dir / filename
-            file_path.write_bytes(resp.content)
+            # 1000x1000 max 로 리사이즈 + JPEG q=85 (디스크 절약)
+            try:
+                img = _PIL_Image.open(BytesIO(resp.content))
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.thumbnail((1000, 1000), _PIL_Image.LANCZOS)
+                img.save(file_path, "JPEG", quality=85, optimize=True)
+                _saved_size = file_path.stat().st_size
+            except Exception as _e:
+                logger.warning(f"이미지 리사이즈 실패 ({idx}), 원본 저장: {_e}")
+                file_path.write_bytes(resp.content)
+                _saved_size = len(resp.content)
 
             public_url = f"/api/pa/images/products/{product_id}/{filename}"
 
@@ -235,12 +417,12 @@ async def download_product_images(product_id: int, images_json: str) -> dict:
                         image_idx, size_bytes, scheduled_delete_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (product_id, str(file_path), public_url, url,
-                     idx, len(resp.content), delete_at),
+                     idx, _saved_size, delete_at),
                 )
 
             local_urls.append(public_url)
             downloaded += 1
-            logger.info(f"📸 이미지 저장: {public_url} ({len(resp.content):,} bytes)")
+            logger.info(f"📸 이미지 저장: {public_url} ({_saved_size:,} bytes, 원본 {len(resp.content):,})")
 
         except Exception as e:
             logger.warning(f"이미지 다운로드 오류 ({idx}): {e}")

@@ -191,6 +191,80 @@ def get_seller_product(seller_product_id: str) -> Optional[dict]:
         return None
 
 
+def list_all_seller_products(
+    max_per_page: int = 100,
+    page_sleep: float = 0.12,
+    on_progress: Optional[callable] = None,
+) -> list[dict]:
+    """전체 셀러상품 목록 페이징 조회 (status 무관 — 모두).
+
+    GET /v2/.../marketplace/seller-products?vendorId=...&nextToken=...&maxPerPage=100
+    응답에 totalCount 필드가 없어 nextToken 이 빌 때까지 페이지를 끝까지 돈다.
+
+    Returns:
+        각 dict 는 sellerProductId, statusName, productName 등 쿠팡 응답 원본 키 포함.
+    """
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return []
+    path = "/v2/providers/seller_api/apis/api/v1/marketplace/seller-products"
+    next_token = ""
+    out: list[dict] = []
+    page = 0
+    while True:
+        qs = f"vendorId={COUPANG_VENDOR_ID}&nextToken={next_token}&maxPerPage={max_per_page}"
+        try:
+            r = _request_with_retry(
+                "GET", BASE + path + "?" + qs,
+                headers=_signature("GET", path, qs), timeout=20,
+            )
+        except Exception as e:
+            logger.error(f"seller-products 페이지 {page+1} 요청 실패: {e}")
+            break
+        if r is None or r.status_code >= 400:
+            logger.warning(
+                f"seller-products 페이지 {page+1} 응답 오류: "
+                f"{r.status_code if r else 'None'}"
+            )
+            break
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+        for d in body.get("data") or []:
+            out.append(d)
+        next_token = body.get("nextToken") or ""
+        page += 1
+        if on_progress:
+            try:
+                on_progress(page, len(out))
+            except Exception:
+                pass
+        if not next_token:
+            break
+        time.sleep(page_sleep)
+    return out
+
+
+def count_seller_products_by_status() -> dict:
+    """전체 셀러상품 카운트 — 상태(statusName) 별 분류.
+
+    Returns:
+        {"total": int, "by_status": {"승인완료": N, "임시저장": M, ...}, "fetched_at": ISO}
+        실패/credential 미설정 시 total=None, by_status={}.
+    """
+    from datetime import datetime, timezone
+    products = list_all_seller_products()
+    by_status: dict = {}
+    for p in products:
+        st = p.get("statusName") or "unknown"
+        by_status[st] = by_status.get(st, 0) + 1
+    return {
+        "total": len(products),
+        "by_status": by_status,
+        "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
 def update_vendor_item_price(vendor_item_id: str, sale_price: int) -> tuple[bool, str]:
     """vendorItem 의 판매가 변경 (PUT /vendor-items/{id}/prices/{price}).
 
@@ -229,7 +303,7 @@ def get_vendor_item_ids(seller_product_id: str) -> list[str]:
 
 def request_approval(seller_product_id: str) -> tuple[bool, str]:
     """임시저장된 셀러상품에 대해 승인 요청 전송
-    (PUT /v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{id}/requests/approval).
+    (PUT /v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{id}/approvals).
 
     register_product 를 requested=False 로 호출한 뒤 이 API 를 호출해야 쿠팡 심사가 시작된다.
     """
@@ -237,7 +311,7 @@ def request_approval(seller_product_id: str) -> tuple[bool, str]:
         return False, "COUPANG_* 미설정"
     if not seller_product_id:
         return False, "seller_product_id 없음"
-    path = f"/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}/requests/approval"
+    path = f"/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}/approvals"
     try:
         r = _request_with_retry("PUT", BASE + path, headers=_signature("PUT", path), timeout=30)
         if r is None:
@@ -632,3 +706,561 @@ def sync_orders(start: str, end: str, status: str = "ACCEPT") -> dict:
         "unmapped": unmapped,
         "errors": errors,
     }
+
+
+# ────────────────────────────────────────────────────────────
+# 즉시할인쿠폰 (FMS) — 생성/조회/아이템추가/파기
+# 비동기 패턴: write API 는 reqId 반환 → get_request_status 로 결과 polling
+# 한도: 아이템 추가 1회 10,000건. 발급 후 아이템 삭제 불가.
+# ────────────────────────────────────────────────────────────
+
+_FMS_BASE_V1 = f"/v2/providers/fms/apis/api/v1/vendors/{COUPANG_VENDOR_ID}"
+_FMS_BASE_V2 = f"/v2/providers/fms/apis/api/v2/vendors/{COUPANG_VENDOR_ID}"
+
+
+def create_coupon(
+    contract_id: int,
+    name: str,
+    discount: int,
+    max_discount_price: int,
+    start_at: str,
+    end_at: str,
+    type_: str = "RATE",
+    wow_exclusive: bool = False,
+) -> tuple[bool, str, Optional[str]]:
+    """즉시할인쿠폰 생성. (성공여부, 메시지, requestedId).
+
+    type_: RATE(정률 %) / PRICE(정액 원) / FIXED_WITH_QUANTITY(수량별 정액)
+    discount: RATE 1-100, PRICE 1+
+    start_at/end_at: 'yyyy-MM-dd HH:mm:ss' (start_at은 다음날 00시부터 가능)
+    """
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "credentials missing", None
+    path = _FMS_BASE_V2 + "/coupon"
+    body = {
+        "contractId": contract_id,
+        "name": name[:45],
+        "maxDiscountPrice": int(max_discount_price),
+        "discount": int(discount),
+        "startAt": start_at,
+        "endAt": end_at,
+        "type": type_,
+        "wowExclusive": "true" if wow_exclusive else "false",
+    }
+    try:
+        r = _request_with_retry(
+            "POST", BASE + path,
+            headers=_signature("POST", path),
+            json=body, timeout=20,
+        )
+    except Exception as e:
+        return False, f"exception: {e}", None
+    if r is None:
+        return False, "no response", None
+    if r.status_code >= 400:
+        return False, f"http {r.status_code}: {r.text[:300]}", None
+    body_resp = r.json() if r.text else {}
+    data = body_resp.get("data") or {}
+    if not data.get("success"):
+        return False, f"api fail: {body_resp.get('message') or body_resp.get('errorMessage') or r.text[:200]}", None
+    req_id = (data.get("content") or {}).get("requestedId")
+    return True, "ok", req_id
+
+
+def add_coupon_items(coupon_id: int, vendor_item_ids: list[int]) -> tuple[bool, str, Optional[str]]:
+    """쿠폰에 vendorItem 추가. 1회 10,000개 한도. (ok, msg, reqId)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "credentials missing", None
+    if not vendor_item_ids:
+        return False, "empty vendor_item_ids", None
+    if len(vendor_item_ids) > 10000:
+        return False, f"vendor_items size {len(vendor_item_ids)} > 10000", None
+    path = _FMS_BASE_V1 + f"/coupons/{coupon_id}/items"
+    body = {"vendorItems": [int(v) for v in vendor_item_ids]}
+    try:
+        r = _request_with_retry(
+            "POST", BASE + path,
+            headers=_signature("POST", path),
+            json=body, timeout=30,
+        )
+    except Exception as e:
+        return False, f"exception: {e}", None
+    if r is None:
+        return False, "no response", None
+    if r.status_code >= 400:
+        return False, f"http {r.status_code}: {r.text[:300]}", None
+    body_resp = r.json() if r.text else {}
+    data = body_resp.get("data") or {}
+    if not data.get("success"):
+        return False, f"api fail: {body_resp.get('message') or r.text[:200]}", None
+    return True, "ok", (data.get("content") or {}).get("requestedId")
+
+
+def get_request_status(requested_id: str) -> Optional[dict]:
+    """async 요청 결과 조회. content 반환 (status, type, couponId, succeeded, failed, failedVendorItems)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    path = _FMS_BASE_V1 + f"/requested/{requested_id}"
+    try:
+        r = _request_with_retry("GET", BASE + path, headers=_signature("GET", path), timeout=15)
+    except Exception as e:
+        logger.error(f"[coupon] request status 예외: {e}")
+        return None
+    if r is None or r.status_code >= 400:
+        return None
+    body = r.json() if r.text else {}
+    return (body.get("data") or {}).get("content")
+
+
+def wait_for_request(requested_id: str, timeout: int = 180, interval: float = 2.0) -> Optional[dict]:
+    """status가 DONE/FAIL 될 때까지 polling. content 반환."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        c = get_request_status(requested_id)
+        if c and c.get("status") in ("DONE", "FAIL"):
+            return c
+        time.sleep(interval)
+    return get_request_status(requested_id)  # 마지막 한 번 더
+
+
+def expire_coupon(coupon_id: int) -> tuple[bool, str, Optional[str]]:
+    """쿠폰 파기 (action=expire). (ok, msg, reqId)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "credentials missing", None
+    path = _FMS_BASE_V1 + f"/coupons/{coupon_id}"
+    qs = "action=expire"
+    try:
+        r = _request_with_retry(
+            "PUT", BASE + path + "?" + qs,
+            headers=_signature("PUT", path, qs),
+            timeout=20,
+        )
+    except Exception as e:
+        return False, f"exception: {e}", None
+    if r is None:
+        return False, "no response", None
+    if r.status_code >= 400:
+        return False, f"http {r.status_code}: {r.text[:300]}", None
+    body_resp = r.json() if r.text else {}
+    data = body_resp.get("data") or {}
+    if not data.get("success"):
+        return False, f"api fail: {body_resp.get('message') or r.text[:200]}", None
+    return True, "ok", (data.get("content") or {}).get("requestedId")
+
+
+def get_coupon(coupon_id: int) -> Optional[dict]:
+    """쿠폰 단건 조회 (contractId/status/type 등)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    path = _FMS_BASE_V2 + "/coupon"
+    qs = f"couponId={coupon_id}"
+    try:
+        r = _request_with_retry("GET", BASE + path + "?" + qs, headers=_signature("GET", path, qs), timeout=15)
+    except Exception:
+        return None
+    if r is None or r.status_code >= 400:
+        return None
+    return ((r.json() or {}).get("data") or {}).get("content")
+
+
+def list_coupons(status: str, page: int = 1, size: int = 20, sort: str = "desc") -> Optional[list]:
+    """쿠폰 목록 조회 by status (STANDBY/APPLIED/PAUSED/EXPIRED/DETACHED)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    path = _FMS_BASE_V2 + "/coupons"
+    qs = f"status={status}&page={page}&size={size}&sort={sort}"
+    try:
+        r = _request_with_retry("GET", BASE + path + "?" + qs, headers=_signature("GET", path, qs), timeout=15)
+    except Exception:
+        return None
+    if r is None or r.status_code >= 400:
+        return None
+    return ((r.json() or {}).get("data") or {}).get("content") or []
+
+
+def discover_contract_id() -> Optional[int]:
+    """기존 쿠폰 목록에서 contractId 자동 발견. 없으면 None."""
+    for st in ("APPLIED", "STANDBY", "PAUSED", "EXPIRED"):
+        items = list_coupons(st, page=1, size=1, sort="desc")
+        if items:
+            cid = items[0].get("contractId")
+            if cid:
+                return int(cid)
+    return None
+
+
+# ────────────────────────────────────────────────────────────
+# 발주서 (v5) + 반품/취소 (v6/v4) — 추가 함수들
+# ordersheet v5 응답엔 orderItems[].canceled / cancelCount / holdCountForCancel 포함.
+# v6 returnRequests 가 cancel sync 의 핵심 (receiptId 회수).
+# ────────────────────────────────────────────────────────────
+
+_OPENAPI_V4 = f"/v2/providers/openapi/apis/api/v4/vendors/{COUPANG_VENDOR_ID}"
+_OPENAPI_V5 = f"/v2/providers/openapi/apis/api/v5/vendors/{COUPANG_VENDOR_ID}"
+_OPENAPI_V6 = f"/v2/providers/openapi/apis/api/v6/vendors/{COUPANG_VENDOR_ID}"
+
+
+def _kst_offset_q(date_str: str, suffix_zero: bool = False) -> str:
+    """v5 createdAtFrom/To 파라미터 형식 인코딩 (URL 안전, KST '+09:00' → '%2B09:00').
+
+    date_str: 'yyyy-MM-dd' 또는 'yyyy-MM-ddTHH:mm'
+    """
+    if "T" not in date_str and suffix_zero:
+        date_str = date_str + "T00:00"
+    return date_str + "%2B09:00"
+
+
+def get_orders_v5(
+    start: str, end: str, status: str = "ACCEPT",
+    search_type: str | None = None, max_per_page: int = 50,
+    next_token: str = "",
+) -> Optional[dict]:
+    """v5 ordersheet 목록 조회. 단일 페이지. {data:[...], nextToken}.
+
+    start/end:
+      - 일단위 페이징: 'yyyy-MM-dd' (KST 자동)
+      - 분단위 (search_type='timeFrame'): 'yyyy-MM-ddTHH:mm'
+    """
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    path = _OPENAPI_V5 + "/ordersheets"
+    qs_parts = [
+        f"createdAtFrom={_kst_offset_q(start, suffix_zero=(search_type=='timeFrame'))}",
+        f"createdAtTo={_kst_offset_q(end, suffix_zero=(search_type=='timeFrame'))}",
+        f"status={status}",
+        f"maxPerPage={max_per_page}",
+    ]
+    if search_type:
+        qs_parts.append(f"searchType={search_type}")
+    if next_token:
+        qs_parts.append(f"nextToken={next_token}")
+    qs = "&".join(qs_parts)
+    try:
+        r = _request_with_retry("GET", BASE + path + "?" + qs, headers=_signature("GET", path, qs), timeout=20)
+    except Exception as e:
+        logger.error(f"v5 ordersheet 예외: {e}")
+        return None
+    if r is None or r.status_code >= 400:
+        if r is not None:
+            logger.warning(f"v5 ordersheet status={r.status_code} body={r.text[:200]}")
+        return None
+    body = r.json() if r.text else {}
+    return body  # {code, message, data:[], nextToken}
+
+
+def get_ordersheet_by_box(shipment_box_id: int) -> Optional[dict]:
+    """v5 발주서 단건 조회 (shipmentBoxId)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    path = _OPENAPI_V5 + f"/ordersheets/{shipment_box_id}"
+    try:
+        r = _request_with_retry("GET", BASE + path, headers=_signature("GET", path), timeout=15)
+    except Exception:
+        return None
+    if r is None or r.status_code >= 400:
+        return None
+    return ((r.json() or {}).get("data"))
+
+
+def get_ordersheet_by_order(order_id: int) -> Optional[list]:
+    """v5 발주서 단건 조회 (orderId). 같은 orderId 의 여러 ordersheet 가능 → list."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    path = _OPENAPI_V5 + f"/{order_id}/ordersheets"
+    try:
+        r = _request_with_retry("GET", BASE + path, headers=_signature("GET", path), timeout=15)
+    except Exception:
+        return None
+    if r is None or r.status_code >= 400:
+        return None
+    body = r.json() or {}
+    return body.get("data") or []
+
+
+def get_ordersheet_history(shipment_box_id: int) -> Optional[list]:
+    """v5 배송상태 히스토리 조회. data.details[] 또는 data[]."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    path = _OPENAPI_V5 + f"/ordersheets/{shipment_box_id}/history"
+    try:
+        r = _request_with_retry("GET", BASE + path, headers=_signature("GET", path), timeout=15)
+    except Exception:
+        return None
+    if r is None or r.status_code >= 400:
+        return None
+    body = r.json() or {}
+    data = body.get("data")
+    if isinstance(data, dict):
+        return data.get("details") or []
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def get_return_requests(
+    start: str, end: str,
+    status: str | None = None,
+    cancel_type: str = "RETURN",
+    search_type: str | None = None,
+    max_per_page: int = 50,
+    next_token: str = "",
+    order_id: int | None = None,
+) -> Optional[dict]:
+    """v6 반품/취소 요청 목록 조회. {data:[...], nextToken}.
+
+    cancel_type='CANCEL' 시 status 빼고 호출 가능 (즉시취소 캐치).
+    cancel_type='RETURN' 시 status 필수 (RU/UC/CC/PR).
+    search_type='timeFrame' 시 분단위, 파라미터: yyyy-MM-ddTHH:mm.
+    """
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    path = _OPENAPI_V6 + "/returnRequests"
+    qs_parts = [
+        f"createdAtFrom={start}",
+        f"createdAtTo={end}",
+        f"cancelType={cancel_type}",
+    ]
+    if status:
+        qs_parts.append(f"status={status}")
+    if search_type:
+        qs_parts.append(f"searchType={search_type}")
+    if order_id:
+        qs_parts.append(f"orderId={order_id}")
+    if max_per_page and search_type != "timeFrame":
+        qs_parts.append(f"maxPerPage={max_per_page}")
+    if next_token and search_type != "timeFrame":
+        qs_parts.append(f"nextToken={next_token}")
+    qs = "&".join(qs_parts)
+    try:
+        r = _request_with_retry("GET", BASE + path + "?" + qs, headers=_signature("GET", path, qs), timeout=30)
+    except Exception as e:
+        logger.error(f"v6 returnRequests 예외: {e}")
+        return None
+    if r is None or r.status_code >= 400:
+        if r is not None:
+            logger.warning(f"v6 returnRequests status={r.status_code} body={r.text[:200]}")
+        return None
+    return r.json() or {}
+
+
+def get_return_request(receipt_id: int) -> Optional[dict]:
+    """v6 반품 단건 조회 (receiptId — RETURN type 만)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    path = _OPENAPI_V6 + f"/returnRequests/{receipt_id}"
+    try:
+        r = _request_with_retry("GET", BASE + path, headers=_signature("GET", path), timeout=15)
+    except Exception:
+        return None
+    if r is None or r.status_code >= 400:
+        return None
+    body = r.json() or {}
+    data = body.get("data")
+    if isinstance(data, list):
+        return data[0] if data else None
+    return data
+
+
+def acknowledge_orders(shipment_box_ids: list[int]) -> tuple[bool, dict]:
+    """v4 상품준비중 처리 (ACCEPT → INSTRUCT). 50개 한도."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, {"error": "credentials missing"}
+    if len(shipment_box_ids) > 50:
+        return False, {"error": "max 50"}
+    path = _OPENAPI_V4 + "/ordersheets/acknowledgement"
+    body = {"vendorId": COUPANG_VENDOR_ID, "shipmentBoxIds": [int(x) for x in shipment_box_ids]}
+    try:
+        r = _request_with_retry("PUT", BASE + path, headers=_signature("PUT", path), json=body, timeout=30)
+    except Exception as e:
+        return False, {"error": f"exception: {e}"}
+    if r is None:
+        return False, {"error": "no response"}
+    if r.status_code >= 400:
+        return False, {"error": f"http {r.status_code}", "body": r.text[:300]}
+    return True, r.json() or {}
+
+
+def upload_invoice(items: list[dict]) -> tuple[bool, dict]:
+    """v4 송장업로드 (INSTRUCT → DEPARTURE). items: [{shipmentBoxId, orderId, vendorItemId, deliveryCompanyCode, invoiceNumber, splitShipping, preSplitShipped, estimatedShippingDate}]."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, {"error": "credentials missing"}
+    path = _OPENAPI_V4 + "/orders/invoices"
+    body = {"vendorId": COUPANG_VENDOR_ID, "orderSheetInvoiceApplyDtos": items}
+    try:
+        r = _request_with_retry("POST", BASE + path, headers=_signature("POST", path), json=body, timeout=30)
+    except Exception as e:
+        return False, {"error": f"exception: {e}"}
+    if r is None or r.status_code >= 400:
+        return False, {"error": f"http {r.status_code if r else 'none'}", "body": (r.text[:300] if r else "")}
+    return True, r.json() or {}
+
+
+def update_invoice(items: list[dict]) -> tuple[bool, dict]:
+    """v4 송장업데이트 (이미 등록된 송장 수정)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, {"error": "credentials missing"}
+    path = _OPENAPI_V4 + "/orders/updateInvoices"
+    body = {"vendorId": COUPANG_VENDOR_ID, "orderSheetInvoiceApplyDtos": items}
+    try:
+        r = _request_with_retry("POST", BASE + path, headers=_signature("POST", path), json=body, timeout=30)
+    except Exception as e:
+        return False, {"error": f"exception: {e}"}
+    if r is None or r.status_code >= 400:
+        return False, {"error": f"http {r.status_code if r else 'none'}", "body": (r.text[:300] if r else "")}
+    return True, r.json() or {}
+
+
+def stop_shipment(receipt_id: int, cancel_count: int) -> tuple[bool, str]:
+    """v4 출고중지완료 (발송 전 cancel 확정)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "credentials missing"
+    path = _OPENAPI_V4 + f"/returnRequests/{receipt_id}/stoppedShipment"
+    body = {"vendorId": COUPANG_VENDOR_ID, "receiptId": receipt_id, "cancelCount": cancel_count}
+    try:
+        r = _request_with_retry("PUT", BASE + path, headers=_signature("PUT", path), json=body, timeout=20)
+    except Exception as e:
+        return False, f"exception: {e}"
+    if r is None:
+        return False, "no response"
+    if r.status_code >= 400:
+        return False, f"http {r.status_code}: {r.text[:200]}"
+    return True, "ok"
+
+
+def complete_shipment(receipt_id: int, delivery_company: str, invoice_number: str) -> tuple[bool, str]:
+    """v4 이미출고 처리 (이미 발송 후 cancel 처리)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "credentials missing"
+    path = _OPENAPI_V4 + f"/returnRequests/{receipt_id}/completedShipment"
+    body = {
+        "vendorId": COUPANG_VENDOR_ID, "receiptId": receipt_id,
+        "deliveryCompanyCode": delivery_company, "invoiceNumber": invoice_number,
+    }
+    try:
+        r = _request_with_retry("PUT", BASE + path, headers=_signature("PUT", path), json=body, timeout=20)
+    except Exception as e:
+        return False, f"exception: {e}"
+    if r is None or r.status_code >= 400:
+        return False, f"http {r.status_code if r else 'none'}: {r.text[:200] if r else ''}"
+    return True, "ok"
+
+
+def confirm_return_received(receipt_id: int) -> tuple[bool, str]:
+    """v4 반품상품 입고 확인처리."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "credentials missing"
+    path = _OPENAPI_V4 + f"/returnRequests/{receipt_id}/receiveConfirmation"
+    body = {"vendorId": COUPANG_VENDOR_ID, "receiptId": receipt_id}
+    try:
+        r = _request_with_retry("PUT", BASE + path, headers=_signature("PUT", path), json=body, timeout=15)
+    except Exception as e:
+        return False, f"exception: {e}"
+    if r is None or r.status_code >= 400:
+        return False, f"http {r.status_code if r else 'none'}: {r.text[:200] if r else ''}"
+    return True, "ok"
+
+
+def approve_return(receipt_id: int, cancel_count: int) -> tuple[bool, str]:
+    """v4 반품요청 승인 처리 (환불 진행)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "credentials missing"
+    path = _OPENAPI_V4 + f"/returnRequests/{receipt_id}/approval"
+    body = {"vendorId": COUPANG_VENDOR_ID, "receiptId": receipt_id, "cancelCount": cancel_count}
+    try:
+        r = _request_with_retry("PUT", BASE + path, headers=_signature("PUT", path), json=body, timeout=15)
+    except Exception as e:
+        return False, f"exception: {e}"
+    if r is None or r.status_code >= 400:
+        return False, f"http {r.status_code if r else 'none'}: {r.text[:200] if r else ''}"
+    return True, "ok"
+
+
+def get_return_withdraw(cancel_ids: list[int]) -> Optional[list]:
+    """v4 반품철회 이력 조회. 50개 한도."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return None
+    if len(cancel_ids) > 50:
+        return None
+    path = _OPENAPI_V4 + "/returnWithdrawList"
+    body = {"cancelIds": [int(x) for x in cancel_ids]}
+    try:
+        r = _request_with_retry("POST", BASE + path, headers=_signature("POST", path), json=body, timeout=15)
+    except Exception:
+        return None
+    if r is None or r.status_code >= 400:
+        return None
+    body_resp = r.json() or {}
+    return body_resp.get("data") or []
+
+
+def cancel_order(
+    order_id: int, vendor_item_ids: list[int], receipt_counts: list[int],
+    user_id: str,
+    big_cancel_code: str = "CANERR",
+    middle_cancel_code: str = "CCTTER",
+) -> tuple[bool, dict]:
+    """v5 주문상품 취소 처리 (능동 취소). 결제완료/상품준비중만 가능. 판매자점수 하락 위험."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, {"error": "credentials missing"}
+    if len(vendor_item_ids) != len(receipt_counts):
+        return False, {"error": "vendor/count length mismatch"}
+    path = _OPENAPI_V5 + f"/orders/{order_id}/cancel"
+    body = {
+        "orderId": order_id,
+        "vendorItemIds": [int(x) for x in vendor_item_ids],
+        "receiptCounts": [int(x) for x in receipt_counts],
+        "bigCancelCode": big_cancel_code,
+        "middleCancelCode": middle_cancel_code,
+        "vendorId": COUPANG_VENDOR_ID,
+        "userId": user_id,
+    }
+    try:
+        r = _request_with_retry("POST", BASE + path, headers=_signature("POST", path), json=body, timeout=30)
+    except Exception as e:
+        return False, {"error": f"exception: {e}"}
+    if r is None:
+        return False, {"error": "no response"}
+    if r.status_code >= 400:
+        return False, {"error": f"http {r.status_code}", "body": r.text[:300]}
+    return True, r.json() or {}
+
+
+def register_return_invoice(
+    receipt_id: int, delivery_company: str, invoice_number: str,
+    type_: str = "RETURN", reg_number: str | None = None,
+) -> tuple[bool, dict]:
+    """v4 회수 송장 등록. type=RETURN/EXCHANGE."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, {"error": "credentials missing"}
+    path = _OPENAPI_V4 + "/return-exchange-invoices/manual"
+    body = {
+        "returnExchangeDeliveryType": type_,
+        "receiptId": receipt_id,
+        "deliveryCompanyCode": delivery_company,
+        "invoiceNumber": invoice_number,
+    }
+    if reg_number:
+        body["regNumber"] = reg_number
+    try:
+        r = _request_with_retry("POST", BASE + path, headers=_signature("POST", path), json=body, timeout=15)
+    except Exception as e:
+        return False, {"error": f"exception: {e}"}
+    if r is None or r.status_code >= 400:
+        return False, {"error": f"http {r.status_code if r else 'none'}", "body": (r.text[:300] if r else "")}
+    return True, r.json() or {}
+
+
+def complete_long_term(shipment_box_id: int, invoice_number: str) -> tuple[bool, str]:
+    """v4 장기미배송 배송완료 처리 (DEPARTURE 30일+)."""
+    if not (COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY and COUPANG_VENDOR_ID):
+        return False, "credentials missing"
+    path = _OPENAPI_V4 + "/completeLongTermUndelivery"
+    body = {"shipmentBoxId": int(shipment_box_id), "invoiceNumber": invoice_number}
+    try:
+        r = _request_with_retry("POST", BASE + path, headers=_signature("POST", path), json=body, timeout=20)
+    except Exception as e:
+        return False, f"exception: {e}"
+    if r is None or r.status_code >= 400:
+        return False, f"http {r.status_code if r else 'none'}: {r.text[:200] if r else ''}"
+    return True, "ok"
+

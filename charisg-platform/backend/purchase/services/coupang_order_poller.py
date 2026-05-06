@@ -64,7 +64,13 @@ def _record_job(
 
 
 async def _poll_once() -> None:
-    """1회 폴링 실행. 예외는 내부에서 삼켜 루프 지속성 보장."""
+    """1회 폴링 실행. 예외는 내부에서 삼켜 루프 지속성 보장.
+
+    INSERT(sync_orders) 성공 시 audit log(_record_job) 보다 번역 task 큐잉을 먼저
+    수행한다. _record_job 은 단순 audit 이지만 SQLite 락 경합으로 실패할 수 있고,
+    같은 try 블록에 두면 INSERT 후 신규 주문이 번역 큐에 못 들어가는 사고가 난다
+    (2026-05-03 우혜경 주문 67번 사고).
+    """
     now = datetime.now(tz=KST)
     start = _format_kst_date(now - timedelta(days=POLL_DAYS - 1))
     end = _format_kst_date(now)
@@ -72,28 +78,35 @@ async def _poll_once() -> None:
 
     try:
         result = await asyncio.to_thread(sync_orders, start, end)
-        _record_job(job_id, start, end, result, status="done")
-        logger.info(
-            "[coupang-order-poller] %s~%s — 조회=%d 신규=%d 중복=%d 매핑실패=%d 에러=%d",
-            start, end,
-            result.get("fetched", 0),
-            result.get("inserted", 0),
-            result.get("duplicated", 0),
-            result.get("unmapped", 0),
-            result.get("errors", 0),
-        )
-        # 신규 주문은 백그라운드 번역 큐 + Discord 알림 (Phase B).
-        new_oids = result.get("new_order_ids", [])
-        if new_oids:
-            asyncio.create_task(_notify_new_orders(new_oids))
-        for new_oid in new_oids:
-            asyncio.create_task(_translate_safely(new_oid))
     except Exception as e:
-        logger.exception("[coupang-order-poller] 예외")
-        _record_job(
-            job_id, start, end, {"fetched": 0, "inserted": 0, "errors": 1},
-            status="error", error=str(e)[:500],
-        )
+        logger.exception("[coupang-order-poller] sync_orders 실패")
+        try:
+            _record_job(
+                job_id, start, end, {"fetched": 0, "inserted": 0, "errors": 1},
+                status="error", error=str(e)[:500],
+            )
+        except Exception:
+            logger.exception("[coupang-order-poller] _record_job 도 실패 (무시)")
+        return
+
+    # 신규 주문 번역 큐잉을 audit log 보다 먼저 실행 — _record_job 실패가 번역 누락을 일으키지 않게
+    for new_oid in result.get("new_order_ids", []):
+        asyncio.create_task(_translate_safely(new_oid))
+
+    logger.info(
+        "[coupang-order-poller] %s~%s — 조회=%d 신규=%d 중복=%d 매핑실패=%d 에러=%d",
+        start, end,
+        result.get("fetched", 0),
+        result.get("inserted", 0),
+        result.get("duplicated", 0),
+        result.get("unmapped", 0),
+        result.get("errors", 0),
+    )
+
+    try:
+        _record_job(job_id, start, end, result, status="done")
+    except Exception:
+        logger.exception("[coupang-order-poller] _record_job 실패 (audit 만 누락, 번역은 진행됨)")
 
 
 async def _translate_safely(order_id: int) -> None:
@@ -102,38 +115,6 @@ async def _translate_safely(order_id: int) -> None:
         await translate_order(order_id)
     except Exception:
         logger.exception("[coupang-order-poller] order %d 번역 태스크 예외", order_id)
-
-
-async def _notify_new_orders(order_ids: list[int]) -> None:
-    """신규 쿠팡 주문 N건 Discord 알림 — denormalized 컬럼으로 hot.db 만 조회."""
-    try:
-        from backend.purchase.services.notifier import notify_new_order
-        from backend.purchase.database import get_db_hot
-        with get_db_hot() as conn:
-            placeholders = ",".join("?" * len(order_ids))
-            rows = conn.execute(
-                f"""SELECT id, channel_order_id, sale_price_krw, quantity,
-                           child_asin, asin_cache, product_name_cache
-                    FROM orders WHERE id IN ({placeholders})""",
-                order_ids,
-            ).fetchall()
-        for r in rows:
-            title = r["product_name_cache"] or "(이름 없음)"
-            qty = r["quantity"] or 1
-            unit_price = int(r["sale_price_krw"] or 0)
-            total = unit_price * qty
-            option = r["child_asin"] if r["child_asin"] and r["child_asin"] != r["asin_cache"] else None
-            await asyncio.to_thread(
-                notify_new_order,
-                channel="coupang",
-                product_name=title[:120],
-                asin=r["asin_cache"] or "-",
-                option=option,
-                price_krw=total,
-                order_id=str(r["channel_order_id"] or r["id"]),
-            )
-    except Exception:
-        logger.exception("[coupang-order-poller] 알림 실패 (무시)")
 
 
 async def run_forever() -> None:

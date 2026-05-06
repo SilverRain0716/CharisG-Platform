@@ -159,7 +159,13 @@ def parse_row(row: dict) -> Optional[dict]:
     """시트 한 행 → sourcing_candidates INSERT 용 dict. 필수 누락 시 None."""
     asin = _pick(row, HEADER_ALIASES["asin"]).upper()
     if not ASIN_RE.match(asin):
-        return None
+        # ASIN 컬럼이 없거나 잘못된 경우 — URL 에서 추출 시도
+        url_raw = _pick(row, HEADER_ALIASES["amazon_url"])
+        m = re.search(r"/dp/([A-Z0-9]{10})", url_raw or "", re.IGNORECASE)
+        if m:
+            asin = m.group(1).upper()
+        if not ASIN_RE.match(asin):
+            return None
 
     price_usd: Optional[float] = None
     price_krw: Optional[float] = None

@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from backend.purchase.database import get_db
+from backend.purchase.services import clean_policy
 from backend.purchase.services.coupang_service import register_product
 from backend.purchase.services import policy_constants as P
 from backend.purchase.services.coupang_meta import get_category_meta, build_default_notices
@@ -539,6 +540,29 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
         return {"ok": False, "skip": True,
                 "error": f"이미 등록됨 (channel_product_id={existing['channel_product_id']})"}
 
+    # ── 중복 ASIN 검사 (clean_policy) ──
+    with get_db() as conn:
+        asin_row = conn.execute("SELECT asin FROM products WHERE id=?", (product_id,)).fetchone()
+    asin = asin_row['asin'] if asin_row else None
+    if asin:
+        is_dup, dup_info = clean_policy.check_duplicate_asin(asin, channel='coupang', exclude_product_id=product_id)
+        if is_dup:
+            reason = f"중복 ASIN — 이미 listed (product_id={dup_info['product_id']}, cpid={dup_info['channel_product_id']})"
+            with get_db() as conn:
+                conn.execute(
+                    """UPDATE listings_pa SET status='excluded',
+                       error_message=?, last_synced_at=CURRENT_TIMESTAMP
+                       WHERE product_id=? AND channel='coupang'""",
+                    (reason, product_id),
+                )
+            clean_policy.log_violation(
+                stage='upload_coupang', violation_type='duplicate_asin',
+                action_taken='excluded', asin=asin,
+                product_id=product_id, channel='coupang',
+                notes=f'기존 listed product_id={dup_info["product_id"]}',
+            )
+            return {"ok": False, "skip": True, "error": reason}
+
     # 브랜드 블랙리스트 사전 차단 (쿠팡 유통경로 소명 대응 — 정품 민감 브랜드 차단)
     with get_db() as conn:
         prow = conn.execute(
@@ -558,10 +582,11 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
                 )
             return {"ok": False, "skip": True, "error": reason}
 
-        # 국내 의약품 분류·식약처 금지 성분 hard block
-        # 영업등록(수입식품등 인터넷구매대행업) 보유와 무관하게 판매 불가.
-        ing = _is_banned_ingredient(prow["title_en"] or "", prow["title_ko"] or "")
-        if ing:
+        # 국내 의약품 분류·식약처 금지 성분 hard block (clean_policy 위임)
+        blocked_ing, ing = clean_policy.check_prohibited_ingredients(
+            prow["title_en"] or "", prow["title_ko"] or "",
+        )
+        if blocked_ing:
             reason = f"금지 성분 차단 ({ing}) — 국내 의약품 분류 또는 수입금지"
             with get_db() as conn:
                 conn.execute(
@@ -570,6 +595,12 @@ def list_product(product_id: int, image_urls: list[str] | None = None) -> dict:
                        WHERE product_id=? AND channel='coupang'""",
                     (reason, product_id),
                 )
+            clean_policy.log_violation(
+                stage='upload_coupang', violation_type='prohibited_ingredient',
+                action_taken='excluded', matched_keyword=ing,
+                product_id=product_id, channel='coupang',
+                original_text=prow['title_en'],
+            )
             return {"ok": False, "skip": True, "error": reason}
 
     # 사전 카테고리 차단 (coupang_categories.path 기준 키워드 검사)

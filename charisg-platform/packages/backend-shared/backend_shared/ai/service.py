@@ -349,7 +349,18 @@ def _call_gemini(prompt: str, max_tokens: int = 2000, max_retries: int = 3) -> O
     if GEMINI_API_KEY_FALLBACK:
         keys.append((GEMINI_API_KEY_FALLBACK, "free"))
     if GEMINI_API_KEY and GEMINI_API_KEY != GEMINI_API_KEY_FALLBACK:
-        keys.append((GEMINI_API_KEY, "paid"))
+        keys.append((GEMINI_API_KEY, "primary"))
+    # 추가 로테이션 키 (GEMINI_API_KEY_2 ~ _9)
+    import os as _os
+    _seen = {k for k, _ in keys}
+    for n in range(2, 10):
+        v = _os.environ.get(f'GEMINI_API_KEY_{n}', '')
+        if v and v not in _seen:
+            keys.append((v, f'extra_{n}'))
+            _seen.add(v)
+    # 호출마다 랜덤 순서로 셔플 — 모든 키에 부하 분산
+    import random as _random
+    _random.shuffle(keys)
     if not keys:
         logger.error("GEMINI_API_KEY not set")
         return None
@@ -390,6 +401,10 @@ def _call_gemini(prompt: str, max_tokens: int = 2000, max_retries: int = 3) -> O
                     continue
 
                 if resp.status_code == 503:
+                    # 다음 키가 있으면 1회 시도 후 즉시 전환 (전체 재시도 시간 단축)
+                    if key_idx < len(keys) - 1 and attempt >= 1:
+                        logger.warning(f"⏳ Gemini 503 (key#{key_idx + 1}) → 다음 키 전환")
+                        break
                     wait = 3 * (2 ** attempt)  # 3s, 6s, 12s
                     logger.warning(f"⏳ Gemini 503 서버 과부하 → {wait}초 대기 (key#{key_idx + 1} {attempt + 1}/{max_retries})")
                     time.sleep(wait)
@@ -487,6 +502,7 @@ def _build_translate_prompt(text: str, source_lang: str, target_lang: str, conte
 - 특수문자 (" * ? < > \\)는 사용하지 마세요. 괄호()도 최소화하세요. 인치는 "인치"로, 곱하기는 "x"로 표기하세요.
 - 모델번호 나열, 호환 차종 나열, 세부 규격 등 긴 리스트는 제거하세요.
 - 불필요한 수식어(프리미엄, 고급, 최고급 등)는 생략하세요.
+- 건강식품/영양제는 의약품적 효능 표현(치료, 완화, 예방, 항산화, 면역력 강화/증진/지원, 알레르기 완화, 설사 완화, 기능 지원, 건강 보조 등)을 절대 사용하지 마세요. 식약처 「건강기능식품 표시·광고 심의기준」 위반 우려.
 
 원문: {text}"""
 

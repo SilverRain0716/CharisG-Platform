@@ -394,3 +394,56 @@ def preview(product_id: int, user: dict = Depends(current_user)):
     if not payload:
         raise HTTPException(404, "상품 없음")
     return payload
+
+
+# ── 스마트스토어 상품 카운트 (API 직접 조회, 1시간 캐시) ──────
+_SS_COUNT_CACHE_KEY = "smartstore.product_count_cache"
+_SS_COUNT_TTL_SEC = 3600
+
+
+@router.get("/products/count")
+def products_count(refresh: bool = False, user: dict = Depends(current_user)):
+    """네이버 측 SALE 상태 상품 수 (API 직접 조회, 10,000 한도 측정 기준).
+
+    호출 1회로 끝나므로 빠르나 일관성을 위해 settings 1시간 캐시.
+    refresh=true 면 캐시 무시하고 강제 재조회.
+    """
+    import json
+    from backend.purchase.services.naver_commerce_service import get_sale_product_count
+    now = datetime.now(timezone.utc)
+
+    if not refresh:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key=?",
+                (_SS_COUNT_CACHE_KEY,),
+            ).fetchone()
+        if row and row["value"]:
+            try:
+                cached = json.loads(row["value"])
+                fetched_at = datetime.strptime(
+                    cached["fetched_at"], "%Y-%m-%dT%H:%M:%SZ"
+                ).replace(tzinfo=timezone.utc)
+                age = (now - fetched_at).total_seconds()
+                if age < _SS_COUNT_TTL_SEC:
+                    cached["cached"] = True
+                    cached["age_sec"] = int(age)
+                    return cached
+            except Exception:
+                pass
+
+    total = get_sale_product_count()
+    result = {
+        "total": total,
+        "fetched_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if total is not None:
+        with get_db() as conn:
+            conn.execute(
+                """INSERT INTO settings (key, value) VALUES (?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (_SS_COUNT_CACHE_KEY, json.dumps(result, ensure_ascii=False)),
+            )
+    result["cached"] = False
+    result["age_sec"] = 0
+    return result

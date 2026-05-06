@@ -56,4 +56,6 @@ def init_db() -> None:
         (24, migrations_dir / "schema_pa_v24.sql", "products: naver_attributes_json + coupang_attributes_json 분리"),
         (25, migrations_dir / "schema_pa_v25.sql", "product_keywords (N:M 키워드 매핑)"),
         (26, migrations_dir / "schema_pa_v26.sql", "listings_pa.coupang_auto_matched (B 안 차등 처리)"),
+        (27, migrations_dir / "schema_pa_v27.sql", "sheet_queue (대량 import 자동 파이프라인)"),
+        (28, migrations_dir / "schema_pa_v28.sql", "sheet_queue.target_channels (채널 선택 업로드)"),
     ])
