@@ -25,6 +25,30 @@ TIER_MARGIN_SHRINK_MAX = 30.0 # 15~30% : 마진 축소 (가격 유지)
                               # > 30% : excluded 후보 마킹
 
 
+def _load_forwarder_extras() -> dict:
+    """settings 에서 forwarder 경로 추가 비용 항목 일괄 로드.
+
+    v37 (2026-05-18) 보강 — calculate_sale_krw 가 기본적으로 0 으로 처리하던
+    안전마진/CS/return 을 명시적으로 전달해 실측 마진 산정.
+    """
+    keys = ("pricing.safety_margin_krw", "margin.cs_cost_krw", "margin.return_reserve_pct")
+    out: dict = {}
+    with get_db() as conn:
+        for k in keys:
+            r = conn.execute("SELECT value FROM settings WHERE key=?", (k,)).fetchone()
+            if r and r["value"] not in (None, ""):
+                try:
+                    out[k] = float(r["value"])
+                except (TypeError, ValueError):
+                    pass
+    return {
+        "safety_krw":  out.get("pricing.safety_margin_krw", 5000.0),
+        "cs_krw":      out.get("margin.cs_cost_krw",        2000.0),
+        # margin.return_reserve_pct 는 정수 % (예: 3) 로 저장됨 → 0.03 로 변환
+        "return_pct":  out.get("margin.return_reserve_pct", 3.0) / 100.0,
+    }
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -51,11 +75,13 @@ def recalculate_blocked_listings(
     Returns:
         {processed, by_action: {...}, samples: [...]}
     """
+    # 2026-05-15: pre-upload 호출 지원 — status='pending' 도 포함. upload 전에 sale_krw
+    # 보정해서 채널에 옳은 가격으로 첫 등록되도록 (race window 제거).
     sql = """SELECT lp.id, lp.channel, lp.sale_krw, lp.cost_krw_snapshot,
                     p.cost_usd, p.weight_g, p.asin
                FROM listings_pa lp
                JOIN products p ON p.id = lp.product_id
-              WHERE lp.status='listed'
+              WHERE lp.status IN ('pending','listed')
                 AND lp.kr_shipping_eligible = 0
                 AND p.cost_usd IS NOT NULL"""
     params: list = []
@@ -73,6 +99,9 @@ def recalculate_blocked_listings(
     processed = 0
     now = _now_iso()
 
+    # v37: Forwarder 경로 비용 항목 일괄 로드 (호출당 settings query 3개를 1번으로)
+    extras = _load_forwarder_extras()
+
     with get_db() as conn:
         for r in rows:
             try:
@@ -80,10 +109,18 @@ def recalculate_blocked_listings(
                 cur_price = r["sale_krw"] or 0
                 fw_usd = forwarder_shipping_usd(r["weight_g"])
 
+                # v37 보강:
+                #   - amazon_shipping_usd=0  : Forwarder 경유 → Amazon 직배송 안 거침
+                #     (기존엔 settings default $11 자동 적용되어 LBS 와 이중 차감)
+                #   - safety/cs/return       : 누락 비용 차감 → 실측 마진 정확
                 new = calculate_sale_krw(
                     cost_usd=cost_usd,
+                    amazon_shipping_usd=0.0,
                     cj_shipping_usd=fw_usd,
                     channel=r["channel"],
+                    safety_margin_krw=extras["safety_krw"],
+                    cs_cost_krw=extras["cs_krw"],
+                    return_reserve_pct=extras["return_pct"],
                 )
                 required_price = new["sale_krw"]
 
@@ -164,7 +201,7 @@ def summary() -> dict:
                       SUM(CASE WHEN forwarder_action='mark_exclude' THEN 1 ELSE 0 END) AS mark_exclude,
                       SUM(CASE WHEN forwarder_action='keep' THEN 1 ELSE 0 END) AS keep
                  FROM listings_pa
-                WHERE status='listed' AND kr_shipping_eligible=0"""
+                WHERE status IN ('pending','listed') AND kr_shipping_eligible=0"""
         ).fetchone()
         per_ch = conn.execute(
             """SELECT channel,
@@ -174,7 +211,7 @@ def summary() -> dict:
                       SUM(CASE WHEN forwarder_action='mark_exclude' THEN 1 ELSE 0 END) AS mark_exclude,
                       SUM(CASE WHEN forwarder_action='keep' THEN 1 ELSE 0 END) AS keep
                  FROM listings_pa
-                WHERE status='listed' AND kr_shipping_eligible=0
+                WHERE status IN ('pending','listed') AND kr_shipping_eligible=0
                 GROUP BY channel"""
         ).fetchall()
     return {
@@ -190,14 +227,14 @@ def apply_exclusions(channel: Optional[str] = None, limit: Optional[int] = None)
     """
     sql = """UPDATE listings_pa
                 SET status = 'excluded'
-              WHERE status = 'listed'
+              WHERE status IN ('pending','listed')
                 AND forwarder_action = 'mark_exclude'"""
     params: list = []
     if channel:
         sql += " AND channel = ?"
         params.append(channel)
     if limit:
-        sql += f" AND id IN (SELECT id FROM listings_pa WHERE status='listed' AND forwarder_action='mark_exclude'"
+        sql += f" AND id IN (SELECT id FROM listings_pa WHERE status IN ('pending','listed') AND forwarder_action='mark_exclude'"
         if channel:
             sql += " AND channel = ?"
             params.append(channel)

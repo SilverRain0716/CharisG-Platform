@@ -152,6 +152,7 @@ def init_db() -> None:
         (33, migrations_dir / "schema_pa_v33.sql", "listings_pa coupang_seller_status (반려 동기화)"),
         (34, migrations_dir / "schema_pa_v34.sql", "listings_pa kr_shipping_eligible + checked_at (한국 직배 검증 캐시)"),
         (35, migrations_dir / "schema_pa_v35.sql", "listings_pa forwarder pricing 컬럼 (직배 불가 시 배대지 경유 가격 재산정)"),
+        (37, migrations_dir / "schema_pa_v37.sql", "마진 계산 누락 비용 보강 settings (안전마진/Direct 분리)"),
     ])
 
     # hot.db — 별도 마이그레이션 (단일 schema 파일)
