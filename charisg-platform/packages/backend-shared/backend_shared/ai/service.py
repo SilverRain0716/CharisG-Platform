@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Optional
@@ -109,6 +110,31 @@ GEMINI_EMBED_BATCH_URL = f"https://generativelanguage.googleapis.com/v1beta/mode
 # 공개 API — 라우터에서 호출
 # ═══════════════════════════════════════
 
+_KO_CHAR_RE = re.compile(r"[가-힣]")
+_EN_LETTER_RE = re.compile(r"[A-Za-z]")
+
+
+def _has_korean(s: str) -> bool:
+    return bool(s) and bool(_KO_CHAR_RE.search(s))
+
+
+def _has_latin(s: str) -> bool:
+    return bool(s) and bool(_EN_LETTER_RE.search(s))
+
+
+def _needs_retry(text: str, result: str, target_lang: str) -> bool:
+    """LLM 결과가 원문 그대로거나 target_lang 문자가 없으면 재시도 필요."""
+    if not result:
+        return False
+    if result.strip() == text.strip():
+        return True
+    if target_lang == "ko" and not _has_korean(result):
+        return True
+    if target_lang == "en" and not _has_latin(result):
+        return True
+    return False
+
+
 async def translate_text(
     text: str,
     source_lang: str = "en",
@@ -119,6 +145,9 @@ async def translate_text(
     번역 (캐시 적용)
 
     Returns: {"translated": "번역된 텍스트", "cached": True/False}
+
+    안전망: 결과가 원문 그대로거나 target_lang 문자가 0자면 강화 프롬프트로
+    1회 재시도 (짧은 SKU/한국인 이름 등 LLM fallback 회피).
     """
     if not text or not text.strip():
         return {"translated": "", "cached": False}
@@ -130,6 +159,15 @@ async def translate_text(
 
     prompt = _build_translate_prompt(text, source_lang, target_lang, context)
     result = await _call_ai_async(prompt)
+
+    # 결과 안전망: 원문 그대로거나 target_lang 문자 없으면 강화 프롬프트 재시도
+    if result and _needs_retry(text, result, target_lang):
+        retry_prompt = _build_translate_prompt(
+            text, source_lang, target_lang, context, force_translate=True,
+        )
+        retry_result = await _call_ai_async(retry_prompt)
+        if retry_result and not _needs_retry(text, retry_result, target_lang):
+            result = retry_result
 
     if result:
         _cache_set(text, source_lang, target_lang, result)
@@ -487,7 +525,8 @@ def _call_claude(prompt: str, max_tokens: int = 2000) -> Optional[str]:
 # 프롬프트 빌더
 # ═══════════════════════════════════════
 
-def _build_translate_prompt(text: str, source_lang: str, target_lang: str, context: str) -> str:
+def _build_translate_prompt(text: str, source_lang: str, target_lang: str,
+                            context: str, force_translate: bool = False) -> str:
     lang_names = {"en": "영어", "ko": "한국어", "ja": "일본어", "zh": "중국어"}
     src = lang_names.get(source_lang, source_lang)
     tgt = lang_names.get(target_lang, target_lang)
@@ -508,6 +547,30 @@ def _build_translate_prompt(text: str, source_lang: str, target_lang: str, conte
 
     if context:
         prompt += f"\n컨텍스트: {context}"
+
+    if force_translate and target_lang == "ko":
+        prompt += """
+
+**중요 — 강제 한국어 번역**:
+- 원문이 짧거나 모델명/SKU/숫자 위주처럼 보여도 *반드시* 한국어 의역을 시도하세요.
+- 브랜드명(영문)은 그대로 두되, 일반 명사/카테고리 키워드는 한국어로 옮기세요.
+  예) "Rocks Collection" → "광물 컬렉션", "Excavation Tool Kit" → "발굴 도구 키트",
+      "Geology Hammer" → "지질학 해머", "Telescope" → "망원경"
+- 결과에 한국어가 1개 이상 포함되어야 합니다.
+- 원문을 그대로 출력하지 마세요 (브랜드명/모델번호 제외)."""
+
+    if force_translate and target_lang == "en":
+        prompt += """
+
+**IMPORTANT — Force English output**:
+- Even for short Korean names or single-word inputs, output a valid English
+  romanization or translation. Never echo the original Korean text.
+- Korean personal names → Revised Romanization (예: 신상무 → Shin Sang-mu,
+  김민지 → Kim Min-ji). Output 'Given Surname' order if a single name token,
+  preserve syllable boundaries with hyphens.
+- Korean addresses → Standard English with [building/unit], [road], [district],
+  [province], [postal-code] order. Romanize apartment/building names.
+- Result must contain at least one Latin character. Do NOT echo the original."""
 
     prompt += "\n\n번역만 출력하세요 (추가 설명 없이)."
     return prompt
