@@ -124,12 +124,25 @@ async def swap_oldest_no_sales(n: int, job_id: Optional[str] = None) -> dict:
     ⚠️ 영구 삭제 — 네이버 한도가 모든 상태 합산이라 stop_sales 로는 회전 안 됨.
     DB 의 products 정보는 보존됨 (새 listings_pa 행으로 재등록 가능).
 
+    환경변수 PA_DISABLE_AUTO_ROTATION=1 이면 호출 즉시 no-op 반환 (운영자 수동
+    전환 시 무매출 상품 자동 영구 삭제 차단).
+
     각 건에 대해:
       1. naver_commerce_service.delete_product(originProductNo)
       2. listings_pa.status='rotated' (성공) 또는 error_message (실패)
 
     Discord 알림은 caller 가 결과 받아서 별도 호출.
     """
+    if os.environ.get("PA_DISABLE_AUTO_ROTATION") == "1":
+        logger.warning(
+            "[rotation] PA_DISABLE_AUTO_ROTATION=1 — swap %d건 요청 차단됨 "
+            "(자동 영구 삭제 비활성화)", n,
+        )
+        return {
+            "requested": n, "candidates": 0, "ok": 0, "fail": 0, "details": [],
+            "disabled": True,
+        }
+
     candidates = find_swap_candidates(n)
     if not candidates:
         return {"requested": n, "candidates": 0, "ok": 0, "fail": 0, "details": []}
