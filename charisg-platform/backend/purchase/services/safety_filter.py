@@ -186,6 +186,79 @@ _TIER4_RE = _build_re(TIER4_CUSTOMS)
 _TIER5_RE = _build_re(TIER5_MALLTAIL)
 
 
+# ── Tier 6: 식약처 8조 1호 — 제품명에 병명 포함 (질병 예방·치료 효능 인식) ─
+# 식품등의 표시·광고에 관한 법률 제8조 1호 위반 의심:
+# "질병의 예방·치료에 효능이 있는 것으로 인식할 우려가 있는 표시 또는 광고"
+# → 제품명에 병명만 들어가도 8조 1호 위반 적발 사례 다수.
+TIER6_DISEASE_NAMES: tuple[str, ...] = (
+    # 대사 질환
+    "당뇨", "diabetes", "diabetic",
+    "빈혈", "anemia", "anaemia",
+    "고혈압", "저혈압", "hypertension",
+    "고지혈증", "이상지질혈증", "고콜레스테롤",
+    "비만", "obesity",
+    # 심혈관
+    "심장병", "뇌졸중", "동맥경화", "심혈관질환",
+    "heart disease", "stroke", "arteriosclerosis", "atherosclerosis",
+    # 뇌·정신
+    "치매", "알츠하이머", "파킨슨",
+    "dementia", "alzheimer", "parkinson",
+    "우울증", "공황장애", "불면증", "수면장애",
+    "depression", "insomnia",
+    "두통", "편두통", "migraine",
+    # 골관절
+    "관절염", "류마티스", "골다공증", "골관절염",
+    "arthritis", "rheumatoid", "osteoporosis",
+    # 소화기
+    "위염", "위궤양", "위장병", "장염", "대장염",
+    "변비", "설사", "과민성대장",
+    "gastritis", "ulcer", "constipation", "diarrhea",
+    # 간·신장
+    "간염", "간경화", "지방간", "신장병", "신부전",
+    "hepatitis", "cirrhosis", "nephritis",
+    # 비뇨생식기
+    "방광염", "전립선", "발기부전",
+    "prostatitis", "erectile dysfunction",
+    # 호흡기
+    "천식", "기관지염", "비염", "축농증",
+    "결핵", "폐렴",
+    "asthma", "bronchitis", "rhinitis", "sinusitis",
+    "tuberculosis", "pneumonia",
+    # 알레르기·피부
+    "알레르기", "알러지", "아토피", "습진", "건선", "두드러기",
+    "allergy", "allergies", "eczema", "psoriasis", "atopic", "atopy",
+    "무좀", "발톱무좀", "주부습진",
+    # 모발 (탈모는 약사법상 의약품 광고 영역)
+    "탈모", "hair loss",
+    # 안과
+    "안구건조", "결막염", "녹내장", "백내장",
+    "dry eye", "conjunctivitis", "glaucoma", "cataract",
+    # 갑상선
+    "갑상선", "갑상샘", "thyroid",
+    # 효능 시사 (병명 인접)
+    "콜레스테롤", "cholesterol",
+    "혈당", "blood sugar",
+    "혈압", "blood pressure",
+)
+_TIER6_RE = _build_re(TIER6_DISEASE_NAMES)
+
+
+# Tier 6 false-positive 제외 — 동물용/측정기/물리치료 도구 등은
+# 식품등 표시·광고법 8조 적용 대상 아님 (사료관리법 또는 의료기기법 별도).
+_TIER6_EXEMPT_CONTEXT_RE = re.compile(
+    r"강아지|고양이|애견|애묘|반려|펫푸드|사료|"
+    r"\bdog\b|\bcat\b|\bpet\b|\bpuppy\b|\bkitten\b|"
+    r"측정기|혈압계|혈당계|체온계|모니터|진단|진단키트|검사키트|테스트지|"
+    r"\bmonitor\b|\bgauge\b|\bmeter\b|test\s*strip|"
+    r"퍼즐|puzzle|장난감|toy|"
+    r"찜질|냉찜질|온찜질|아이마스크|안대|쿨링|핫팩|"
+    r"빗|comb|brush|롤러|마사지기|massage|"
+    r"수납|정리함|보냉|쿨러|케이스|organizer|storage|cooler|"
+    r"\bbook\b|책|동화|도서|학습",
+    re.IGNORECASE,
+)
+
+
 def is_banned_diet_product(title_en: str, title_ko: str = "") -> Optional[str]:
     """약사법 / 식약처 hard block 대상이면 매칭 키워드 반환, 통과면 None.
 
@@ -216,4 +289,8 @@ def is_banned_diet_product(title_en: str, title_ko: str = "") -> Optional[str]:
     m = _CLAIM_RE.search(haystack)
     if m:
         return f"효능표현:{m.group(0)}"
+    # Tier 6 — 식약처 8조 1호 (병명 포함). 동물/측정기/물리치료/책 등 컨텍스트는 면제.
+    m = _TIER6_RE.search(haystack)
+    if m and not _TIER6_EXEMPT_CONTEXT_RE.search(haystack):
+        return f"식약처8조1호:{m.group(0)}"
     return None
