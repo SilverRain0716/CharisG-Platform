@@ -572,6 +572,86 @@ def sec_care(s, pool):
 </section>"""
 
 
+def esc(t):
+    """HTML 이스케이프 — 리뷰 원문에 <, & 가 섞여 온다."""
+    import html as _h
+    return _h.escape(str(t or ""), quote=False)
+
+
+# ── 아마존 실구매 리뷰 (2026-08-15) ─────────────────────
+#   ★출처를 반드시 밝힌다. 참고 템플릿은 'ken*** 고객님' 형식(=우리 쇼핑몰 후기)인데,
+#     아마존 리뷰를 그렇게 실으면 우리 구매자 후기로 오인된다 — 표시광고법 위반이자
+#     채널 제재 사유다. "아마존 실구매 리뷰"로 명시하면 같은 효과를 안전하게 낸다.
+REVIEW_LIMIT = 3          # 사장 지시 — 3건 고정
+
+
+def _stars(n=5):
+    return "".join('<span class="rv-star">★</span>' for _ in range(int(n or 5)))
+
+
+def fetch_reviews(asin, limit=REVIEW_LIMIT):
+    """번역된 5★ 리뷰를 도움됨 순으로. 없으면 빈 리스트 → 섹션 자체를 만들지 않는다.
+
+    ★(asin, star, helpful DESC) 인덱스를 그대로 탄다. 상품이 수만이어도 비용이 일정하다.
+    ★자식에 리뷰가 없으면 그룹 부모 것을 쓴다 — 아마존도 변형끼리 리뷰를 공유한다
+      (실측: HOTEC 3개 상품이 모두 39,310개로 같았다).
+    """
+    if not asin:
+        return [], None
+    import sqlite3
+    con = sqlite3.connect(str(BASE / "backend/purchase/purchase.db"), timeout=30)
+    con.row_factory = sqlite3.Row
+    try:
+        keys = [asin]
+        row = con.execute("SELECT group_master_asin FROM products WHERE asin=? LIMIT 1",
+                          (asin,)).fetchone()
+        if row and row["group_master_asin"]:
+            keys.append(row["group_master_asin"])
+        for k in keys:
+            rv = con.execute(
+                "SELECT title_ko, body_ko, helpful, verified FROM product_reviews"
+                " WHERE asin=? AND star=5 AND body_ko IS NOT NULL AND body_ko<>''"
+                " ORDER BY helpful DESC LIMIT ?", (k, limit)).fetchall()
+            if rv:
+                rate = con.execute("SELECT avg_star, n_ratings FROM product_rating"
+                                   " WHERE asin=?", (k,)).fetchone()
+                return [dict(x) for x in rv], (dict(rate) if rate else None)
+        return [], None
+    except Exception:      # noqa: BLE001 — 리뷰가 없다고 상세페이지를 못 만들면 안 된다
+        return [], None
+    finally:
+        con.close()
+
+
+def sec_reviews(reviews, rate):
+    head = ""
+    if rate and rate.get("n_ratings"):
+        avg = rate.get("avg_star") or 5
+        head = ('<div class="rv-sum">' + _stars(round(avg))
+                + '<b>%.1f</b><span>아마존 평가 %s개</span></div>'
+                % (avg, format(int(rate["n_ratings"]), ",")))
+    cards = []
+    for r in reviews:
+        meta = []
+        if r.get("verified"):
+            meta.append("실구매 확인")
+        if r.get("helpful"):
+            meta.append("도움돼요 %s" % format(int(r["helpful"]), ","))
+        cards.append(
+            '<div class="rv-card"><div class="rv-top">' + _stars(5)
+            + '<span class="rv-src">amazon.com</span></div>'
+            + '<div class="rv-title">%s</div>' % esc(r.get("title_ko"))
+            + '<div class="rv-body">%s</div>' % esc(r.get("body_ko"))
+            + ('<div class="rv-meta">%s</div>' % " · ".join(meta) if meta else "")
+            + "</div>")
+    return ('<section class="sec rv-sec"><div class="rv-head">'
+            '<h2>아마존 실구매 리뷰</h2>'
+            '<p>미국 아마존에서 실제로 구매한 분들이 남긴 후기입니다</p></div>'
+            + head + "".join(cards)
+            + '<div class="rv-note">amazon.com 에 게시된 구매자 리뷰를 번역했습니다. '
+              '본 쇼핑몰의 구매 후기가 아닙니다.</div></section>')
+
+
 RENDERERS = {"hero": sec_hero, "features": sec_features, "compatibility": sec_compat,
              "howto": sec_howto, "spec_highlight": sec_spec, "safety": sec_safety,
              "care": sec_care}
@@ -684,6 +764,24 @@ h2.on-ink{{color:#fff}}
 .crow{{display:flex;gap:22px;align-items:baseline;padding:22px 0;border-bottom:1px solid {LINE}}}
 .crow b{{font-size:23px;font-weight:800;min-width:190px}}
 .crow span{{font-size:20px;color:#6b6b6b;line-height:1.6}}
+
+/* ── 아마존 실구매 리뷰 (2026-08-15) ── */
+.rv-sec{{background:#FFF8E7;padding:56px 40px}}
+.rv-head{{text-align:center;margin-bottom:28px}}
+.rv-head h2{{font-size:44px;font-weight:800;color:#1a1a1a;margin:0 0 10px}}
+.rv-head p{{font-size:20px;color:#6b6b6b;margin:0}}
+.rv-sum{{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:26px}}
+.rv-sum b{{font-size:30px;color:#1a1a1a}}
+.rv-sum span{{font-size:19px;color:#6b6b6b}}
+.rv-star{{color:#FFB400;font-size:26px;letter-spacing:-1px}}
+.rv-card{{background:#fff;border-radius:22px;padding:28px 30px;margin-bottom:16px;
+  box-shadow:0 2px 10px rgba(0,0,0,.05)}}
+.rv-top{{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}}
+.rv-src{{font-size:16px;color:#9a9a9a}}
+.rv-title{{font-size:25px;font-weight:700;color:#1a1a1a;margin-bottom:8px;line-height:1.35}}
+.rv-body{{font-size:21px;color:#4a4a4a;line-height:1.6}}
+.rv-meta{{margin-top:14px;font-size:17px;color:#9a9a9a}}
+.rv-note{{margin-top:18px;text-align:center;font-size:16px;color:#8a8a8a;line-height:1.5}}
 """
 
 
@@ -699,6 +797,15 @@ def build_html(plan, m, policy, channel: str = "coupang"):
         fn = RENDERERS.get(s.get("type"))
         if fn:
             out.append(fn(s, pool))
+
+    # ★리뷰는 기획 모델에 맡기지 않는다 — 데이터가 있으면 붙이고 없으면 생략한다.
+    #   모델에 맡기면 없는데 만들거나, 있는데 빠뜨린다.
+    try:
+        _rv, _rate = fetch_reviews(m.get("asin"))
+        if _rv:
+            out.append(sec_reviews(_rv, _rate))
+    except Exception as _e:      # noqa: BLE001
+        print("  [경고] 리뷰 섹션 생략: %s" % _e)
     html = (f"<!DOCTYPE html><html lang='ko'><head><meta charset='UTF-8'>"
             f"<style>{CSS}</style></head><body>{''.join(out)}</body></html>")
     try:
