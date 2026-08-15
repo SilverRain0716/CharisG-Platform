@@ -632,11 +632,10 @@ def sec_reviews(reviews, rate):
                 % (avg, format(int(rate["n_ratings"]), ",")))
     cards = []
     for r in reviews:
-        meta = []
-        if r.get("verified"):
-            meta.append("실구매 확인")
-        if r.get("helpful"):
-            meta.append("도움돼요 %s" % format(int(r["helpful"]), ","))
+        # ★도움돼요는 화면에 안 낸다(사장 지시 2026-08-15).
+        #   단 정렬에는 계속 쓴다 — 아마존 구매자가 유용하다고 표시한 순서가
+        #   우리가 임의로 고르는 것보다 낫다(fetch_reviews 의 ORDER BY helpful DESC).
+        meta = ["실구매 확인"] if r.get("verified") else []
         cards.append(
             '<div class="rv-card"><div class="rv-top">' + _stars(5)
             + '<span class="rv-src">amazon.com</span></div>'
@@ -773,7 +772,8 @@ h2.on-ink{{color:#fff}}
 .rv-sum{{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:26px}}
 .rv-sum b{{font-size:30px;color:#1a1a1a}}
 .rv-sum span{{font-size:19px;color:#6b6b6b}}
-.rv-star{{color:#FFB400;font-size:26px;letter-spacing:-1px}}
+/* ★.rv-sum span 이 (0,1,1) 로 더 강해 별까지 회색이 됐다. 별 규칙을 올린다 */
+.rv-star,.rv-sum .rv-star{{color:#FFB400;font-size:26px;letter-spacing:-1px}}
 .rv-card{{background:#fff;border-radius:22px;padding:28px 30px;margin-bottom:16px;
   box-shadow:0 2px 10px rgba(0,0,0,.05)}}
 .rv-top{{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}}
