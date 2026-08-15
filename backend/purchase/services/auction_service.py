@@ -484,6 +484,36 @@ def add_item(item_xml: str, *, allow_live: bool = False, version: int = 1) -> di
             "raw": mask(x)}
 
 
+def revise_item(item_id: str, item_xml: str, *, allow_live: bool = False,
+                version: int = 1) -> dict:
+    """등록된 상품을 수정한다. ★AddItem 과 같은 **전체 페이로드**다.
+
+    WSDL: ReviseItemRequestT = MemberTicket + Item(ItemT), ItemT 에 ItemID 속성.
+    → build_item() 산출물에 ItemID 만 얹으면 된다.
+
+    ★부분 수정이 아니다. 상세만 담아 보내면 배송정책·고시정보·수입정보가 사라진다.
+      반드시 등록 때와 같은 빌더로 만든 페이로드를 넘길 것.
+    ★실제 상품이 바뀐다. allow_live=True 를 명시해야 나간다(add_item 과 같은 규칙).
+    """
+    if not allow_live:
+        raise AuctionError("allow_live=True 없이 수정 불가 — 대외 노출물을 바꾸는 행위다")
+    if not item_id:
+        raise AuctionError("item_id 가 없다")
+    # <Item ...> 에 ItemID 를 심는다. 이미 있으면 그대로 둔다.
+    if 'ItemID=' not in item_xml.split('>', 1)[0]:
+        item_xml = re.sub(r"^(\s*<Item\b)", r'\1 ItemID="%s"' % _esc(item_id),
+                          item_xml, count=1)
+    inner = ('<req Version="%d"><MemberTicket><Ticket>%s</Ticket></MemberTicket>%s</req>'
+             % (version, _esc(_ticket()), item_xml))
+    x = call("ReviseItem", inner)
+    m = re.search(r'<ReviseItemResponseT?\s[^>]*ItemID="([^"]+)"', x) \
+        or re.search(r'\bItemID="([^"]+)"', x)
+    lim = rows(x, "DisplayLimit") or rows(x, "DisplayLimitCheckT")
+    return {"item_id": m.group(1) if m else item_id,
+            "display_limit": lim[0] if lim else None,
+            "raw": mask(x)}
+
+
 def stop_selling(item_id: str, *, status: str = STATUS_STOP, version: int = 1) -> bool:
     """판매중지. ★시험 등록 직후 반드시 호출한다."""
     inner = ('<req Version="%d"><MemberTicket><Ticket>%s</Ticket></MemberTicket>'

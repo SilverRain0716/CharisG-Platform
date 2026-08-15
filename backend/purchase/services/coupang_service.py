@@ -682,6 +682,68 @@ def update_product_name(seller_product_id: str, new_name: str, dry_run: bool = F
         return False, f"예외: {e}"
 
 
+def update_product_detail(
+    seller_product_id: str,
+    image_urls: list,
+    dry_run: bool = False,
+) -> tuple:
+    """상세설명(items[].contents)만 교체 후 재제출. 2026-08-15
+
+    ★쿠팡의 '상세'는 items 마다 붙는 contents[] 다. 상품 단위가 아니라 아이템 단위라
+      옵션이 여러 개면 전부 같은 상세를 넣어야 한다(현재 우리 상세는 상품 공통이다).
+
+    ★PUT 은 전체 페이로드다 — GET 결과에서 contents 만 갈아끼우고 나머지는 그대로 둔다.
+      빠뜨린 필드는 사라진다(update_product_name 과 같은 제약).
+
+    ★PUT 후 statusName 이 '승인대기'로 돌아간다. 판매중 상품에 쓰면 노출이 잠시 멈춘다.
+
+    Args:
+        image_urls: detail_agent 가 만든 섹션 이미지의 절대 public_url 목록(순서 유지)
+    """
+    if not (_access_key() and _secret_key() and _vendor()):
+        return False, "COUPANG_* 미설정"
+    if not seller_product_id:
+        return False, "seller_product_id 비어있음"
+    if not image_urls:
+        return False, "상세 이미지가 없다"
+
+    info = get_seller_product(seller_product_id)
+    if not info or not isinstance(info, dict):
+        return False, "조회 실패"
+    data = info.get("data")
+    if not isinstance(data, dict):
+        return False, f"data 없음 (code={info.get('code')})"
+
+    contents = [{
+        "contentsType": "IMAGE",
+        "contentDetails": [
+            {"content": u, "detailType": "IMAGE"} for u in image_urls
+        ],
+    }]
+    items = data.get("items") or []
+    if not items:
+        return False, "items 가 비어 있다"
+    for it in items:
+        it["contents"] = contents
+
+    if dry_run:
+        return True, f"dry_run ok — items={len(items)} 이미지={len(image_urls)}"
+
+    path = "/v2/providers/seller_api/apis/api/v1/marketplace/seller-products"
+    try:
+        r = _request_with_retry("PUT", BASE + path, headers=_signature("PUT", path),
+                                json=data, timeout=30)
+        if r is None:
+            return False, "no response"
+        body = r.json() if r.text else {}
+        if r.status_code < 400 and isinstance(body, dict) and body.get("code") != "ERROR":
+            return True, "상세 교체 완료 — 재승인 대기로 전환됨"
+        msgs = _extract_error_messages(body)
+        return False, f"status={r.status_code} " + ("; ".join(msgs) if msgs else r.text[:200])
+    except Exception as e:      # noqa: BLE001
+        return False, f"예외: {e}"
+
+
 def relist_with_fixed_images(
     seller_product_id: str,
     image_urls: list[str],
