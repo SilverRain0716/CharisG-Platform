@@ -1,0 +1,13 @@
+{
+  "name": "@charisg/auth",
+  "version": "1.0.0",
+  "description": "Charis G Platform 공유 인증 (JWT httpOnly 쿠키 + 401 → Shell 리다이렉트)",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "peerDependencies": {
+    "react": "^18.3.0"
+  }
+}

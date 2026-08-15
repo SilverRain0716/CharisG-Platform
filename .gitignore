@@ -37,3 +37,19 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# ── 2026-08-15 추가 (구조 정리 시) ─────────────────────────
+# ★상품 이미지 4.3G. git 에 들어가면 저장소가 못 쓰게 된다.
+backend/purchase/media/
+# 실행 산출물·스냅샷
+order_snapshots/
+snapshots/
+/tmp/
+# 백업 파일 — 오늘만 수십 개가 생겼다
+*.bak
+*.bak_*
+*.bak.*
+*.preRetrySweep.bak
+*.orig
+# 세이브포인트는 아카이브지 소스가 아니다
+savepoints/

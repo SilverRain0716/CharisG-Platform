@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<!--
+  banner_4_purchase_notice.html — 구매 전 확인사항 (2026-08-08 3차: 실무 고지 보강)
+
+  경쟁사 상세 검토 결과, 분쟁·CS 방어에 직결되는 고지가 우리에게 없어 보강했다.
+  운영 기준(취소 시한·지연 기준·수수료)은 사장 확인값.
+
+  ★신설: 구매대행 서비스 안내 — 당사 지위(중간 서비스), 재고 미보유로 인한 품절·지연,
+         정보 출처와 한계. 종전엔 "우리가 무엇인지" 밝히는 문장이 아예 없었다.
+         banner_3 에서 걷어낸 "아마존이 판매·배송을 책임집니다" 자리를 대신한다.
+  ★신설: 주문 취소 — 당일 18시(18시 이후 주문은 당일 24시)까지, 해외 발주 후는 반품 처리,
+         구매 확정 후 취소 불가, 배송지연 취소는 30일 초과 시.
+  ★보강: 출고 이후 취소 시 배송비 차감 + 물류 수수료.
+  ★보강: 반품 불가 사유에 실무 기준 3개 추가(재포장 불가 / 구성품 분실·누락 / 섭취 흔적).
+         법정 5개(전자상거래법 17조 2항)는 그대로 유지.
+
+  ※사업자 등록번호(화장품책임판매업·수입식품등 영업등록)는 여기 넣지 않는다 —
+    이 배너는 전 계정 공통 정적 JPG 라 계정별로 다른 번호를 담을 수 없다(로고를 뺀 것과 동일한 이유).
+    계정 인식이 되는 자리에 별도로 넣어야 한다.
+
+  수정 후 반드시 재렌더: python -m backend.purchase.scripts.render_coupang_banners
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0; font-family: 'Noto Sans KR', sans-serif; background: #fff; }
+</style>
+</head>
+<body>
+<div style="max-width:860px;margin:0 auto;font-family:'Noto Sans KR',sans-serif">
+<div style="height:5px;background:linear-gradient(90deg,#E8845A,#1B3A5C)"></div>
+<div style="background:#1B3A5C;padding:50px 40px 30px;text-align:center">
+  <div style="display:inline-block;background:#E8845A;border-radius:30px;padding:10px 28px;font-size:20px;font-weight:700;color:#fff;margin-bottom:12px">해외 구매대행 상품</div>
+  <div style="font-size:41px;font-weight:800;color:#fff;margin-bottom:30px">구매 전 꼭 확인해 주세요</div>
+</div>
+<div style="background:#15304D;padding:0 40px 16px">
+
+  <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">구매대행 서비스 안내</div>
+    <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
+      · 당사는 해외 판매처와 고객님을 <span style="color:#1B3A5C;font-weight:600">연결하는 구매대행 서비스</span>이며, 최종 상품·브랜드 선택은 고객님의 판단에 따릅니다.<br>
+      · 재고를 직접 보유하지 않아 현지 사정에 따라 <span style="color:#D94040;font-weight:600">품절 또는 배송 지연</span>이 발생할 수 있습니다.<br>
+      · 상품 정보는 해외 공식 판매처 자료를 바탕으로 제공하며, 실제 상품과 차이가 있을 수 있습니다.
+    </div>
+  </div>
+
+  <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">통관 정보 확인</div>
+    <div style="padding:24px 28px">
+      <div style="font-size:21px;font-weight:700;color:#1B3A5C;margin-bottom:14px">📋 아래 3가지가 반드시 일치해야 합니다</div>
+      <div style="background:#FFF4F0;border:1px solid #F5D9CB;border-radius:12px;padding:20px;text-align:center;font-size:21px;font-weight:700;color:#D94040;line-height:1.6;margin-bottom:16px">
+        수령인 성함 &nbsp;·&nbsp; 수령인 연락처 &nbsp;·&nbsp; 개인통관고유부호
+      </div>
+      <div style="font-size:19px;color:#555;line-height:1.8">
+        하나라도 다르면 통관이 되지 않습니다.<br>
+        발급 당시와 정보가 달라졌다면 관세청에서 재발급 후 주문해 주세요.<br>
+        <span style="font-size:17px;color:#999">개인통관고유부호가 없으시면 관세청 홈페이지에서 무료로 발급받으실 수 있습니다.</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">주문 취소</div>
+    <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
+      · 주문 당일 <span style="color:#D94040;font-weight:600">오후 6시까지</span> 취소하실 수 있습니다.
+      오후 6시 이후 주문은 <span style="color:#D94040;font-weight:600">당일 자정 이전까지</span> 가능합니다.<br>
+      · 해외 발주가 완료된 이후의 취소는 <span style="font-weight:600">반품으로 처리</span>됩니다.<br>
+      · <span style="font-weight:600">구매 확정 이후에는 취소가 불가</span>합니다.<br>
+      · 배송 지연으로 인한 취소는 주문일로부터 <span style="color:#D94040;font-weight:600">30일 초과 시</span> 가능합니다.
+    </div>
+  </div>
+
+  <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">반품 / 교환 기준</div>
+    <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
+      상품 수령 후 <span style="color:#D94040;font-weight:600">7일 이내</span>에 신청하실 수 있습니다.
+      표시·광고 내용과 다르거나 계약과 다르게 이행된 경우에는 그 사실을 안 날부터 <b>30일 이내</b>에 교환·반품이 가능합니다.<br>
+      <span style="color:#1B3A5C;font-weight:600">해외 배송 상품 특성상 반품·교환 진행 시 추가 안내를 드릴 수 있습니다.</span><br><br>
+
+      <span style="font-size:20px;font-weight:700;color:#1B3A5C">반품 시 비용 안내</span><br>
+      · 출고 이후 취소하실 경우 <span style="color:#D94040;font-weight:600">배송비 차감 및 물류 수수료</span>가 발생할 수 있습니다.<br>
+      · 해외 발주 이후 단순 변심으로 취소·반품하실 경우 반품 수수료가 발생합니다.<br>
+      · 분리 배송된 상품을 고객님 사유로 반품하실 경우 박스별 반품 배송비가 부과됩니다.<br><br>
+
+      <span style="font-size:20px;font-weight:700;color:#1B3A5C">반품 / 교환이 불가한 경우</span><br>
+      · 고객님의 책임 있는 사유로 상품이 멸실·훼손된 경우 (상품 확인을 위한 포장 훼손은 제외)<br>
+      · 사용 또는 소비로 상품의 가치가 현저히 감소한 경우<br>
+      · 시간이 지나 재판매가 곤란할 정도로 가치가 감소한 경우<br>
+      · 복제가 가능한 상품의 포장을 훼손한 경우<br>
+      · 주문에 따라 개별 생산되는 상품의 제작이 시작된 경우<br>
+      · <span style="font-weight:600">재포장이 불가하거나 재포장되지 않은 경우</span><br>
+      · <span style="font-weight:600">제공된 구성품을 분실하거나 누락한 경우</span><br>
+      · <span style="font-weight:600">식품을 섭취한 흔적이 있는 경우</span>
+    </div>
+  </div>
+
+  <div style="background:#fff;border-radius:16px;margin-bottom:16px;overflow:hidden">
+    <div style="background:#F7F5F0;padding:18px 28px;font-size:24px;font-weight:700;color:#1B3A5C;border-bottom:2px solid #E8845A">A/S 안내</div>
+    <div style="padding:24px 28px;font-size:19px;color:#555;line-height:1.8">
+      해외 구매대행 상품 특성상 <span style="color:#D94040;font-weight:600">국내 A/S는 제공되지 않습니다.</span>
+    </div>
+  </div>
+
+</div>
+<div style="padding:26px 40px 44px;background:#15304D">
+  <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:22px 26px;font-size:15px;color:rgba(255,255,255,0.62);line-height:1.75">
+    <span style="color:rgba(255,255,255,0.88);font-weight:700;font-size:16px">이미지 · 정보 저작권 안내</span><br>
+    본 페이지의 <b style="color:rgba(255,255,255,0.8)">디자인·구성·문구는 당사가 자체 제작</b>하였으며, 제품 사진은 상품 안내를 위해 인용하였습니다. 권리 관련 문의는 <b style="color:rgba(255,255,255,0.8)">문의하기</b>로 연락 주시면 즉시 확인 후 조치하겠습니다.
+  </div>
+</div>
+</div>
+</body>
+</html>

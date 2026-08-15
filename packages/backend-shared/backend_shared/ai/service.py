@@ -1,0 +1,772 @@
+"""
+ai_service.py — AI 서비스 (번역, SEO, 카테고리 매핑, CS 초안)
+Provider: Gemini (기본) → Claude (향후 전환 가능)
+
+환경변수:
+  AI_PROVIDER=gemini|claude (기본: gemini)
+  GEMINI_API_KEY=...
+  ANTHROPIC_API_KEY=... (Claude 전환 시)
+"""
+import hashlib
+import json
+import logging
+import os
+import threading
+import time
+from typing import Optional
+
+import requests
+
+import os
+from backend_shared._config import GEMINI_API_KEY, GEMINI_API_KEY_FALLBACK
+from backend_shared.context import get_db
+
+logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════
+# Gemini Rate Limiter (무료 티어: RPM 15, RPD 1500)
+# ═══════════════════════════════════════
+
+class GeminiRateLimiter:
+    """Gemini API 호출 한도 보호 — 기본값은 유료 Tier 1 (RPM 1000, RPD 10000).
+
+    GEMINI_RPM, GEMINI_RPD 환경변수로 오버라이드 가능.
+    무료 티어라면 환경변수에서 RPM 14, RPD 1400 으로 낮출 것."""
+
+    def __init__(self, rpm: int | None = None, rpd: int | None = None):
+        if rpm is None:
+            rpm = int(os.environ.get("GEMINI_RPM", "800"))
+        if rpd is None:
+            rpd = int(os.environ.get("GEMINI_RPD", "9000"))
+        self._rpm = rpm
+        self._rpd = rpd
+        self._lock = threading.Lock()
+        self._minute_calls: list[float] = []
+        self._day_calls: list[float] = []
+        self._day_start: float = time.time()
+
+    def wait(self):
+        """★2026-06-02 리미터 제거 — 사용자 Gemini 키 다중·전부 유료, 실한도 사실상 없음.
+        프로세스 내 인위적 RPM/RPD throttle(글로벌 소프트캡)이 2개 키의 처리량을 묶고 있어 no-op 화.
+        실제 429/503(키별 quota·서버과부하)는 gemini_generate 의 재시도+키전환 로직이 처리.
+        GEMINI_RPM/GEMINI_RPD 환경변수로 강제 throttle 복원 가능(아래)."""
+        # 환경변수로 명시 설정 시에만 옛 throttle 동작 (기본 = 무제한)
+        if os.environ.get("GEMINI_FORCE_RATELIMIT") != "1":
+            return True
+        with self._lock:
+            now = time.time()
+            if now - self._day_start > 86400:
+                self._day_calls.clear(); self._day_start = now
+            self._minute_calls = [t for t in self._minute_calls if now - t < 60]
+            if len(self._day_calls) >= self._rpd:
+                logger.warning(f"⚠️ Gemini 일간 한도 ({self._rpd} RPD) — 차단")
+                return False
+            if len(self._minute_calls) >= self._rpm:
+                oldest = self._minute_calls[0]
+                wait_sec = 60 - (now - oldest) + 0.5
+                if wait_sec > 0:
+                    time.sleep(wait_sec)
+            now = time.time()
+            self._minute_calls.append(now); self._day_calls.append(now)
+            return True
+
+    @property
+    def daily_remaining(self) -> int:
+        with self._lock:
+            now = time.time()
+            if now - self._day_start > 86400:
+                return self._rpd
+            active = [t for t in self._day_calls if now - self._day_start < 86400]
+            return max(0, self._rpd - len(active))
+
+
+# 싱글턴 — ai_service + category_service 공유
+gemini_limiter = GeminiRateLimiter()
+
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "gemini")
+
+# ★AI 소진 감지(2026-07-12): 각 provider 429/전키실패 시 True. 둘 다 True=4개 전멸.
+_AI_EXHAUSTED = {"openai": False, "gemini": False}
+def all_ai_exhausted() -> bool:
+    """GPT + Gemini(3키) 모두 한도 소진 여부."""
+    return _AI_EXHAUSTED["openai"] and _AI_EXHAUSTED["gemini"]
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+# Gemini 모델 설정
+GEMINI_MODEL = "gemini-2.5-flash-lite"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+
+# Gemini 임베딩 모델 (768차원 축소 사용)
+GEMINI_EMBED_MODEL = "gemini-embedding-001"
+GEMINI_EMBED_DIM = 768
+GEMINI_EMBED_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBED_MODEL}:embedContent"
+GEMINI_EMBED_BATCH_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBED_MODEL}:batchEmbedContents"
+
+
+# ═══════════════════════════════════════
+# 공개 API — 라우터에서 호출
+# ═══════════════════════════════════════
+
+async def translate_text(
+    text: str,
+    source_lang: str = "en",
+    target_lang: str = "ko",
+    context: str = "",
+) -> dict:
+    """
+    번역 (캐시 적용)
+
+    Returns: {"translated": "번역된 텍스트", "cached": True/False}
+    """
+    if not text or not text.strip():
+        return {"translated": "", "cached": False}
+
+    # 캐시 확인
+    cached = _cache_get(text, source_lang, target_lang)
+    if cached:
+        return {"translated": cached, "cached": True}
+
+    prompt = _build_translate_prompt(text, source_lang, target_lang, context)
+    result = await _call_ai_async(prompt)
+
+    if result:
+        _cache_set(text, source_lang, target_lang, result)
+
+    return {"translated": result or text, "cached": False}
+
+
+async def generate_seo(
+    product_name: str,
+    category: str = "",
+    market: str = "KR",
+    platform: str = "smartstore",
+    description: str = "",
+) -> dict:
+    """
+    SEO 키워드 + 최적화 상품명 생성
+
+    Returns: {
+        "optimized_title": "최적화된 상품명",
+        "keywords": ["키워드1", "키워드2", ...],
+        "tags": ["태그1", "태그2", ...],
+    }
+    """
+    prompt = _build_seo_prompt(product_name, category, market, platform, description)
+    result = await _call_ai_async(prompt)
+
+    try:
+        # JSON 파싱 시도
+        parsed = json.loads(result)
+        return parsed
+    except (json.JSONDecodeError, TypeError):
+        # 파싱 실패 시 원본 텍스트에서 추출
+        return {
+            "optimized_title": product_name,
+            "keywords": [],
+            "tags": [],
+            "raw_response": result,
+        }
+
+
+async def map_category(
+    product_name: str,
+    source_category: str = "",
+    target_platform: str = "smartstore",
+) -> dict:
+    """네이버 스마트스토어 leafCategoryId (숫자 8~10자리) 매핑.
+
+    Returns: {"mapped_category": "50000313", "confidence": 0.0~1.0}
+    - 숫자 ID만 반환. 한글 경로/슬래시 포함 시 무효 처리.
+    """
+    prompt = f"""당신은 네이버 스마트스토어 카테고리 매핑 전문가입니다.
+다음 상품에 맞는 네이버 스마트스토어 leafCategoryId (숫자 8~10자리 코드)를 찾아주세요.
+
+상품명: {product_name}
+원본 카테고리 힌트: {source_category}
+
+중요 규칙:
+1. mapped_category 는 반드시 **숫자만** 포함 (예: "50000313"). 한글/슬래시/공백 금지.
+2. 네이버에 실제로 존재하는 leaf(말단) 카테고리 ID만 반환.
+3. 확실하지 않으면 confidence 를 0.3 이하로 낮추고, 가장 근접한 상위 카테고리 ID 사용.
+
+JSON으로만 답변 (다른 텍스트 없이):
+{{"mapped_category": "50000313", "confidence": 0.0~1.0}}"""
+
+    result = await _call_ai_async(prompt)
+    try:
+        parsed = json.loads(result)
+        mc = str(parsed.get("mapped_category", "")).strip()
+        if not mc.isdigit() or not (6 <= len(mc) <= 12):
+            return {"mapped_category": "", "confidence": 0.0, "raw": mc}
+        return parsed
+    except (json.JSONDecodeError, TypeError):
+        return {"mapped_category": "", "confidence": 0.0}
+
+
+async def generate_cs_draft(
+    ticket_type: str,
+    customer_message: str,
+    order_info: dict = None,
+    market: str = "KR",
+    platform: str = "smartstore",
+) -> str:
+    """CS 응답 초안 생성 (M5에서 본격 사용)"""
+    prompt = f"""당신은 {platform} 마켓의 고객 CS 담당자입니다.
+다음 고객 문의에 대한 응답 초안을 작성해주세요.
+
+문의 유형: {ticket_type}
+고객 메시지: {customer_message}
+주문 정보: {json.dumps(order_info or {}, ensure_ascii=False)}
+마켓: {market}
+
+톤: 정중하고 친절하게, {platform} 마켓 스타일에 맞게 작성.
+응답만 작성하세요 (추가 설명 없이)."""
+
+    return await _call_ai_async(prompt) or ""
+
+
+async def analyze_product(
+    product_data: dict,
+) -> dict:
+    """상품 분석 (마진율, 경쟁도, 추천 여부)"""
+    prompt = f"""다음 상품 데이터를 분석하고 구매대행 상품으로서의 가치를 평가해주세요.
+
+상품 데이터:
+{json.dumps(product_data, ensure_ascii=False, indent=2)}
+
+JSON으로만 답변하세요:
+{{
+  "recommendation": "추천|보류|비추천",
+  "reason": "판단 근거 1-2문장",
+  "estimated_margin_pct": 0,
+  "competition_level": "low|medium|high",
+  "tips": ["팁1", "팁2"]
+}}"""
+
+    result = await _call_ai_async(prompt)
+    try:
+        return json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return {"recommendation": "보류", "reason": "분석 실패", "raw": result}
+
+
+# ═══════════════════════════════════════
+# Provider 분기 — Gemini / Claude
+# ═══════════════════════════════════════
+
+async def _call_ai_async(prompt: str, max_tokens: int = 2000) -> Optional[str]:
+    """AI API 호출 (비동기 래핑 — 이벤트 루프 블로킹 방지)"""
+    import asyncio
+    return await asyncio.to_thread(_call_ai_sync, prompt, max_tokens)
+
+
+def embed_text(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[list[float]]:
+    """Gemini 임베딩 (단건). 768-dim float list 반환."""
+    if not GEMINI_API_KEY or not text:
+        return None
+    for attempt in range(3):
+        if not gemini_limiter.wait():
+            return None
+        try:
+            r = requests.post(
+                f"{GEMINI_EMBED_URL}?key={GEMINI_API_KEY}",
+                json={
+                    "model": f"models/{GEMINI_EMBED_MODEL}",
+                    "content": {"parts": [{"text": text[:8000]}]},
+                    "taskType": task_type,
+                    "outputDimensionality": GEMINI_EMBED_DIM,
+                },
+                timeout=15,
+            )
+            if r.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            r.raise_for_status()
+            return r.json().get("embedding", {}).get("values")
+        except Exception as e:
+            logger.warning(f"embed_text 실패 attempt={attempt}: {e}")
+            time.sleep(1)
+    return None
+
+
+def embed_batch(texts: list[str], task_type: str = "SEMANTIC_SIMILARITY", batch_size: int = 100) -> list[Optional[list[float]]]:
+    """Gemini 임베딩 (배치). batchEmbedContents API 사용."""
+    if not GEMINI_API_KEY or not texts:
+        return []
+    results: list[Optional[list[float]]] = []
+    for start in range(0, len(texts), batch_size):
+        chunk = texts[start:start + batch_size]
+        for attempt in range(3):
+            if not gemini_limiter.wait():
+                results.extend([None] * len(chunk))
+                break
+            try:
+                r = requests.post(
+                    f"{GEMINI_EMBED_BATCH_URL}?key={GEMINI_API_KEY}",
+                    json={
+                        "requests": [
+                            {
+                                "model": f"models/{GEMINI_EMBED_MODEL}",
+                                "content": {"parts": [{"text": t[:8000]}]},
+                                "taskType": task_type,
+                                "outputDimensionality": GEMINI_EMBED_DIM,
+                            } for t in chunk
+                        ]
+                    },
+                    timeout=60,
+                )
+                if r.status_code == 429:
+                    time.sleep(2 ** attempt)
+                    continue
+                r.raise_for_status()
+                embeddings = r.json().get("embeddings", [])
+                results.extend([e.get("values") for e in embeddings])
+                break
+            except Exception as e:
+                logger.warning(f"embed_batch 실패 (start={start}, attempt={attempt}): {e}")
+                time.sleep(1)
+        else:
+            results.extend([None] * len(chunk))
+    return results
+
+
+def _call_ai_sync(prompt: str, max_tokens: int = 2000) -> Optional[str]:
+    """AI API 호출 — provider 로테이션(2026-07-12): 설정 provider 실패 시 다른 AI로 자동 전환.
+       GPT↔Gemini(3키). 둘 다 소진이면 None 반환 + all_ai_exhausted()=True (호출측이 정지 판단)."""
+    if AI_PROVIDER == "claude":
+        return _call_claude(prompt, max_tokens)
+    order = ("openai", "gemini") if AI_PROVIDER == "openai" else ("gemini", "openai")
+    for _prov in order:
+        _r = _call_openai(prompt, max_tokens) if _prov == "openai" else _call_gemini(prompt, max_tokens)
+        if _r:
+            return _r
+    return None
+
+
+def _call_gemini(prompt: str, max_tokens: int = 2000, max_retries: int = 3) -> Optional[str]:
+    """Google Gemini API 호출 (429/503 재시도 + 다중 유료키 부하분산).
+
+    ★2026-06-02: 키 전부 유료 전제 — 호출마다 키 목록을 셔플해 모든 키에 균등 분산(속도↑).
+    "fallback/free" 구분 없음(과거 명칭일 뿐). 키별 quota 소진(429 quota) 시 다음 키로 전환.
+    GEMINI_API_KEY / GEMINI_API_KEY_FALLBACK / GEMINI_API_KEY_2~9 전부 동등 풀.
+    """
+    import os as _os0
+    if _os0.environ.get("PA_SKIP_GEMINI") == "1":
+        _AI_EXHAUSTED["gemini"] = True  # 그룹 prep 스킵 컨텍스트 — Gemini 미사용 취급(GPT까지 죽으면 정지판단)
+        return None
+    keys: list[tuple[str, str]] = []   # [(key, label)]
+    if GEMINI_API_KEY_FALLBACK:
+        keys.append((GEMINI_API_KEY_FALLBACK, "key_a"))
+    if GEMINI_API_KEY and GEMINI_API_KEY != GEMINI_API_KEY_FALLBACK:
+        keys.append((GEMINI_API_KEY, "key_b"))
+    # 추가 로테이션 키 (GEMINI_API_KEY_2 ~ _9)
+    import os as _os
+    _seen = {k for k, _ in keys}
+    for n in range(2, 10):
+        v = _os.environ.get(f'GEMINI_API_KEY_{n}', '')
+        if v and v not in _seen:
+            keys.append((v, f'extra_{n}'))
+            _seen.add(v)
+    # 호출마다 랜덤 순서로 셔플 — 모든 키에 부하 분산
+    import random as _random
+    _random.shuffle(keys)
+    if not keys:
+        logger.error("GEMINI_API_KEY not set")
+        return None
+
+    for key_idx, (key, label) in enumerate(keys):
+        if key_idx > 0:
+            logger.info(f"⚙ Gemini {label} 키로 전환 (#{key_idx + 1})")
+        for attempt in range(max_retries):
+            # Rate limiter 대기
+            if not gemini_limiter.wait():
+                logger.error("Gemini 일간 한도 초과 — 호출 중단")
+                return None
+
+            try:
+                resp = requests.post(
+                    f"{GEMINI_URL}?key={key}",
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {
+                            "maxOutputTokens": max_tokens,
+                            "temperature": 0.3,
+                            "thinkingConfig": {"thinkingBudget": 0},
+                        },
+                    },
+                    timeout=30,
+                )
+
+                # 429 + body 에 'quota' 포함이면 다음 키로 전환 (단, attempt 1회 후)
+                if resp.status_code == 429:
+                    # ★fast-fail: 다음 키 있으면 대기 없이 즉시 전환 (배치 hang 방지)
+                    if key_idx < len(keys) - 1:
+                        logger.warning(f"⏳ Gemini 429 ({label}) → 다음 키 즉시 전환")
+                        break
+                    wait = min(5 * (attempt + 1), 15)
+                    logger.warning(f"⏳ Gemini 429 마지막키 → {wait}초 ({attempt + 1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
+
+                if resp.status_code == 503:
+                    # ★fast-fail: 다음 키 있으면 즉시 전환
+                    if key_idx < len(keys) - 1:
+                        logger.warning(f"⏳ Gemini 503 (key#{key_idx + 1}) → 다음 키 즉시 전환")
+                        break
+                    wait = 3 * (2 ** attempt)  # 3s, 6s, 12s
+                    logger.warning(f"⏳ Gemini 503 서버 과부하 → {wait}초 대기 (key#{key_idx + 1} {attempt + 1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
+
+                data = resp.json()
+
+                if "candidates" in data and data["candidates"]:
+                    text = data["candidates"][0]["content"]["parts"][0]["text"]
+                    # JSON 코드블록 제거
+                    text = text.strip()
+                    if text.startswith("```json"):
+                        text = text[7:]
+                    if text.startswith("```"):
+                        text = text[3:]
+                    if text.endswith("```"):
+                        text = text[:-3]
+                    _AI_EXHAUSTED["gemini"] = False
+                    return text.strip()
+
+                logger.warning(f"Gemini 응답 없음: {str(data)[:200]}")
+                return None
+
+            except requests.exceptions.Timeout:
+                logger.warning(f"Gemini 타임아웃 (key#{key_idx + 1} {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    time.sleep(5)
+                    continue
+                break  # 다음 키
+            except Exception as e:
+                logger.error(f"Gemini API 오류 (key#{key_idx + 1}): {e}")
+                break  # 다음 키
+
+    _AI_EXHAUSTED["gemini"] = True
+    logger.error(f"Gemini API {len(keys)}개 키 모두 재시도 실패")
+    return None
+
+
+def _call_claude(prompt: str, max_tokens: int = 2000) -> Optional[str]:
+    """Anthropic Claude API 호출 (향후 전환용)"""
+    if not ANTHROPIC_API_KEY:
+        logger.error("ANTHROPIC_API_KEY not set")
+        return None
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        data = resp.json()
+
+        if "content" in data and data["content"]:
+            text = data["content"][0]["text"]
+            text = text.strip()
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            return text.strip()
+
+        logger.warning(f"Claude 응답 없음: {data}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Claude API 오류: {e}")
+        return None
+
+
+def _call_openai(prompt: str, max_tokens: int = 2000) -> Optional[str]:
+    """OpenAI GPT API 호출 (Gemini 한도소진 대체용, 2026-07-09).
+    AI_PROVIDER=openai 로 활성. REST 직접호출(openai 패키지 불요). 모델=OPENAI_MODEL(기본 gpt-4o-mini)."""
+    if not OPENAI_API_KEY:
+        logger.error("OPENAI_API_KEY not set")
+        return None
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": OPENAI_MODEL,
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        if resp.status_code == 429:
+            _AI_EXHAUSTED["openai"] = True
+            logger.warning("OpenAI 429 — 한도/rate 소진")
+            return None
+        data = resp.json()
+        choices = data.get("choices") or []
+        if choices:
+            _AI_EXHAUSTED["openai"] = False
+            text = (choices[0].get("message") or {}).get("content") or ""
+            text = text.strip()
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            return text.strip()
+        logger.warning(f"OpenAI 응답 없음: {data}")
+        return None
+    except Exception as e:
+        logger.error(f"OpenAI API 오류: {e}")
+        return None
+
+
+# ═══════════════════════════════════════
+# 프롬프트 빌더
+# ═══════════════════════════════════════
+
+def _build_translate_prompt(text: str, source_lang: str, target_lang: str, context: str) -> str:
+    lang_names = {"en": "영어", "ko": "한국어", "ja": "일본어", "zh": "중국어"}
+    src = lang_names.get(source_lang, source_lang)
+    tgt = lang_names.get(target_lang, target_lang)
+
+    prompt = f"""{src}를 {tgt}로 번역해주세요. 상품명/설명 번역이므로 자연스러운 상업적 표현을 사용하세요.
+
+규칙:
+- 상품명은 반드시 45~50자 이내로 작성하세요 (네이버 스마트스토어 등록정보 검토 기준).
+- 구성: 브랜드명 + 핵심 상품명 + 주요 스펙 1~2개 (예시 그대로 — Anker 고속 무선 충전 패드 15W Qi 호환).
+- 브랜드명을 모르면 brand 자리를 비우고 핵심 상품명부터 시작하세요. `[브랜드]`, `[브랜드명]`, `[브랜드 명]`, `[브랜드명 미포함]` 같은 대괄호 placeholder 문자열을 출력에 절대 포함하지 마세요.
+- 브랜드명은 영문 그대로 유지하세요.
+- 인증 배지 설명(OEKO-TEX, Climate Pledge 등)은 제외하세요.
+- 특수문자 (" * ? < > \\)는 사용하지 마세요. 괄호()도 최소화하세요. 인치는 "인치"로, 곱하기는 "x"로 표기하세요.
+- 모델번호 나열, 호환 차종 나열, 세부 규격 등 긴 리스트는 제거하세요.
+- 불필요한 수식어(프리미엄, 고급, 최고급 등)는 생략하세요.
+- 건강식품/영양제는 의약품적 효능 표현(치료, 완화, 예방, 항산화, 면역력 강화/증진/지원, 알레르기 완화, 설사 완화, 기능 지원, 건강 보조 등)을 절대 사용하지 마세요. 식약처 「건강기능식품 표시·광고 심의기준」 위반 우려.
+
+원문: {text}"""
+
+    if context:
+        prompt += f"\n컨텍스트: {context}"
+
+    prompt += "\n\n번역만 출력하세요 (추가 설명 없이)."
+    return prompt
+
+
+def _build_seo_prompt(
+    product_name: str, category: str, market: str,
+    platform: str, description: str,
+) -> str:
+    market_rules = {
+        "smartstore": "스마트스토어 규정: 상품명 45~50자 이내 (등록정보 검토 통과 기준), 특수문자(\"*?<>\\) 금지, 괄호() 최소화, 인치는 '인치'로 표기, 핵심 키워드 앞배치",
+        "coupang": "쿠팡 규정: 상품명 100자 이내, 브랜드명 필수, 주요 스펙 포함",
+        "amazon": "Amazon 규정: Title 200자 이내, bullet points 5개, backend keywords",
+        "ebay": "eBay 규정: Title 80자 이내, item specifics 활용",
+    }
+    rules = market_rules.get(platform, "")
+
+    return f"""다음 상품에 대해 {platform} 마켓 SEO 최적화 상품명과 키워드를 생성해주세요.
+
+원본 상품명: {product_name}
+카테고리: {category}
+마켓: {market}
+{rules}
+상품 설명: {description[:500] if description else '없음'}
+
+**중요 — 검색 상위노출 최적화**: optimized_title은 반드시 50자 이내.
+- 황금공식 순서: (유명브랜드면)브랜드 + 핵심 검색키워드 + 제품명 + 주요 스펙(용량/규격) 1~2개. **검색량 높은 핵심 키워드를 앞쪽 배치**.
+- ★브랜드 위치 규칙(중요): 한국 소비자에게 알려진 유명 브랜드(예: 나이키·스탠리·앤커·다이슨 등)만 맨 앞에 둡니다. **무명·생소한 셀러 브랜드(랜덤 영문 조합이나 검색량 없는 이름, 예: EIHFHIE/LIVEMUG/FlyHugz/RaoRanDang)는 절대 맨 앞에 두지 말고, 핵심 상품 키워드(예: 목베개·속눈썹·스테인리스컵)를 맨 앞에 배치**하세요. 무명 브랜드는 생략하거나 제목 맨 뒤로 보냅니다. 판단 기준: 그 브랜드명을 한국인이 검색창에 칠 것 같지 않으면 무명으로 취급.
+- 브랜드명을 모르면 비우고 시작. `[브랜드]`/`[브랜드명]`/`[브랜드 명]` 같은 대괄호 placeholder 문자열은 절대 출력하지 마세요.
+- 상표기호(®, ™, ℠)와 불필요한 특수문자(엠대시 – 등)는 제거하세요.
+- 모델번호·세부 규격 리스트 제거, 괄호() 최소화, 불필요 수식어(프리미엄/고급 등) 제거. **키워드 반복(스태핑) 금지**.
+- ★★고유명사 절대 보존: 자동차 차종·제조사(Subaru Outback, Honda Accord, 캐딜락 CT5 등),
+  기기 모델명(iPhone 15 Pro, Galaxy S24 등), 브랜드명은 **원문 그대로 유지**하세요.
+  다른 이름으로 바꾸거나 비슷한 다른 모델로 대체하는 것은 절대 금지입니다.
+  (실제 사고: "Subaru Outback" 을 "쏘렌토 아웃백" 으로 바꿔 다른 차종 부품으로 오인되게 만듦)
+- ★차종·기기 전용 상품에서 호환 대상명은 **핵심 정보이므로 지우지 말고 반드시 남기세요**.
+  지워야 하는 것은 "2013-NOW / 7인치·9인치 겸용" 같은 장황한 연식·규격 나열입니다.
+- ★식품/건강식품: 효능·기능성·질병·의약품 표현 절대 금지(면역/항산화/디톡스/흡수/혈액순환/다이어트/특효 등). 성분·함량·용량 등 객관 사실만.
+
+tags(쿠팡 검색어) 규칙:
+- 10~15개. 실제로 사람들이 검색하는 키워드 위주.
+- ★합성어 분해 금지(쿠팡은 형태소 자동분리 — "남성티셔츠"만 넣어도 "남성"/"티셔츠" 모두 잡힘). 중복·유사어 반복 금지(스태핑 패널티).
+- 영문 브랜드/모델 + 한글 키워드 **혼합 권장**(영/한 혼합).
+- ★차종·기기명은 원문 그대로. 임의로 다른 모델명으로 바꾸지 마세요.
+
+JSON으로만 답변하세요 (다른 텍스트 없이):
+{{
+  "optimized_title": "SEO 최적화된 상품명 (50자 이내, 황금공식 순서)",
+  "keywords": ["핵심키워드1", "핵심키워드2", ...최대 12개],
+  "tags": ["검색어1", "검색어2", ...10~15개]
+}}"""
+
+
+# ═══════════════════════════════════════
+# 번역 캐시 (translation_cache 테이블)
+# ═══════════════════════════════════════
+
+def _text_hash(text: str) -> str:
+    return hashlib.md5(text.strip().lower().encode("utf-8")).hexdigest()
+
+
+def _cache_get(text: str, source_lang: str, target_lang: str) -> Optional[str]:
+    h = _text_hash(text)
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT translated_text FROM translation_cache WHERE source_text_hash=? AND source_lang=? AND target_lang=?",
+            (h, source_lang, target_lang),
+        ).fetchone()
+    return row["translated_text"] if row else None
+
+
+def _cache_set(text: str, source_lang: str, target_lang: str, translated: str):
+    h = _text_hash(text)
+    with get_db() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO translation_cache
+               (source_text_hash, source_lang, target_lang, translated_text)
+               VALUES (?, ?, ?, ?)""",
+            (h, source_lang, target_lang, translated),
+        )
+
+
+# ═══════════════════════════════════════
+# Google Trends + AI 소싱 분석
+# ═══════════════════════════════════════
+
+async def analyze_trending_keywords(
+    keywords: list[str],
+    business_model: str = "purchase_agent",
+    market: str = "KR",
+) -> list[dict]:
+    """트렌딩 키워드 AI 분석 → 구매대행/드랍쉬핑 적합성 판단"""
+    batch = keywords[:20]
+    keywords_str = "\n".join(f"- {kw}" for kw in batch)
+
+    model_desc = ("한국에서 해외 구매대행 (미국 아마존 → 한국 판매)"
+                  if business_model == "purchase_agent"
+                  else "드랍쉬핑 (미국 공급처 → 미국/한국 판매)")
+
+    prompt = f"""당신은 해외 구매대행/드랍쉬핑 전문 상품 소싱 분석가입니다.
+
+아래 Google Trends 급상승 키워드들을 분석하고, {model_desc} 사업에 적합한 키워드를 선별해주세요.
+
+키워드 목록:
+{keywords_str}
+
+각 키워드에 대해 JSON 배열로 답변하세요 (다른 텍스트 없이):
+[
+  {{
+    "keyword": "키워드 원문",
+    "suitable": true/false,
+    "reason": "적합/부적합 이유 1-2문장",
+    "category": "카테고리 (홈데코/주방용품/생활용품/뷰티/펫/전자기기/패션/기타)",
+    "estimated_margin_pct": 예상마진율(숫자),
+    "risk": "low/medium/high",
+    "priority": "high/medium/low"
+  }}
+]
+
+판단 기준:
+- 무게 2kg 이하, 크기 작은 상품 우선 (배송비 절감)
+- 마진율 30% 이상 예상되는 상품
+- 경쟁이 과도하지 않은 니치 상품 우선
+- 식품/의약품/위험물/대형가전은 부적합
+- 브랜드 독점 상품(Apple, Nike 등)은 부적합"""
+
+    result = _call_ai_sync(prompt, max_tokens=4000)
+
+    try:
+        items = json.loads(result)
+        for item in items:
+            kw = item.get("keyword", "")
+            query = kw.replace(" ", "+")
+            item["amazon_search_url"] = f"https://www.amazon.com/s?k={query}"
+            item["amazon_bestseller_url"] = f"https://www.amazon.com/s?k={query}&s=exact-aware-popularity-rank"
+        return items
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(f"AI 키워드 분석 파싱 실패: {str(result)[:200]}")
+        return []
+
+
+def generate_amazon_urls(keywords: list[str]) -> list[dict]:
+    """키워드 → 아마존 검색 URL 생성 (규칙 기반)"""
+    urls = []
+    for kw in keywords:
+        query = kw.strip().replace(" ", "+")
+        urls.append({
+            "keyword": kw,
+            "search_url": f"https://www.amazon.com/s?k={query}",
+            "bestseller_url": f"https://www.amazon.com/s?k={query}&s=exact-aware-popularity-rank",
+        })
+    return urls
+
+
+async def generate_sourcing_keywords(
+    category: str = "",
+    business_model: str = "purchase_agent",
+    market: str = "KR",
+    count: int = 20,
+) -> list[str]:
+    """
+    AI가 직접 트렌드 소싱 키워드를 생성
+    Google Trends 대체 — AI의 학습 데이터 기반 트렌드 추천
+    """
+    model_desc = ("한국에서 해외 구매대행 (미국 아마존 → 한국 스마트스토어/쿠팡 판매)"
+                  if business_model == "purchase_agent"
+                  else "드랍쉬핑 (미국 공급처 → 미국/한국 판매)")
+
+    category_filter = f"\n카테고리 집중: {category}" if category else ""
+
+    prompt = f"""당신은 미국 아마존 상품 트렌드 전문 분석가입니다.
+
+현재 미국에서 인기 급상승 중이거나, {model_desc}에 적합한 아마존 검색 키워드를 {count}개 추천해주세요.{category_filter}
+
+조건:
+- 실제 아마존에서 검색하면 상품이 나오는 구체적인 영어 키워드
+- 최근 SNS(TikTok, Instagram)에서 바이럴된 상품 우선
+- 시즌 트렌드 반영 (현재 시즌에 맞는 상품)
+- 무게 2kg 이하, 소형 상품 우선 (국제 배송 적합)
+- 식품/의약품/위험물/대형가전/브랜드 독점 제외
+- 니치하지만 수요가 있는 상품 (경쟁 적당)
+
+카테고리 분포:
+- 홈데코/인테리어: 30%
+- 주방/생활용품: 25%
+- 뷰티/퍼스널케어: 15%
+- 펫/반려동물: 10%
+- 전자기기/액세서리: 10%
+- 기타 (피트니스, 취미 등): 10%
+
+JSON 배열로만 답변하세요 (다른 텍스트 없이):
+["keyword1", "keyword2", "keyword3", ...]"""
+
+    result = _call_ai_sync(prompt, max_tokens=2000)
+
+    try:
+        keywords = json.loads(result)
+        if isinstance(keywords, list):
+            return [str(k).strip() for k in keywords if k][:count]
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(f"AI 키워드 생성 파싱 실패: {str(result)[:200]}")
+
+    return []

@@ -1,0 +1,169 @@
+/* ============================================================
+   Charis G — 디자인 토큰 (라이트/다크)
+
+   구조:
+     · 모든 색은 "R G B" 삼중값으로 둔다. Tailwind preset 이
+       rgb(var(--x) / <alpha-value>) 로 참조하므로 bg-ink-50/30 같은
+       투명도 유틸이 그대로 동작한다.
+     · 다크는 ink 램프를 뒤집는다. ink-50 이 가장 어둡고 ink-900 이 가장
+       밝다. 덕분에 기존 text-ink-500 / border-ink-200 400여 곳이
+       수정 없이 다크에 대응된다.
+     · 테마 전환은 <html data-theme="dark|light">. 값이 없으면 OS 설정을
+       따른다. data-theme 이 항상 미디어쿼리를 이긴다.
+
+   ★색을 이 파일 밖에서 하드코딩하지 말 것. 새 색이 필요하면 여기 토큰을
+     먼저 추가하고 preset 에 노출한다.
+   ============================================================ */
+
+:root {
+  color-scheme: light;
+
+  /* 표면 — canvas(바탕) < surface(카드) < sunken(음영) */
+  --canvas:  233 237 241;
+  --surface: 255 255 255;
+  --sunken:  244 246 249;
+
+  /* 경계선 */
+  --line:        217 224 231;
+  --line-strong: 195 205 215;
+
+  /* 중립 램프 — 라이트에서는 50 이 가장 밝다 */
+  --ink-50:  248 250 252;
+  --ink-100: 241 245 249;
+  --ink-200: 226 232 240;
+  --ink-300: 203 213 225;
+  --ink-400: 139 151 163;
+  --ink-500: 98 111 124;
+  --ink-600: 77 89 101;
+  --ink-700: 61 73 84;
+  --ink-800: 35 45 56;
+  --ink-900: 17 24 33;
+
+  /* 채널 식별색 — 색은 보조다. 문자 마크(C·N·11·E)가 1차 식별.
+     쿠팡·스마트스토어·11번가 3색은 색약(적/녹/청) 분리도와 대비를 검증한 조합. */
+  --ch-cp: 110 86 232;   /* 쿠팡 */
+  --ch-nv: 14 147 132;   /* 스마트스토어 */
+  --ch-st: 176 119 10;   /* 11번가 */
+  --ch-em: 74 95 212;    /* ESM — 현재 미사용(진입 불가) */
+
+  /* 상태색 — 채널색과 절대 겹쳐 쓰지 않는다 */
+  --ok:   20 128 74;
+  --warn: 165 106 6;
+  --crit: 200 53 59;
+  --info: 31 111 208;
+
+  /* soft = 배경용 옅은 톤 */
+  --ok-soft:   227 245 234;
+  --warn-soft: 253 242 220;
+  --crit-soft: 252 236 236;
+  --info-soft: 230 239 251;
+
+  --shadow-card: 0 1px 2px 0 rgb(17 24 33 / .05);
+  --shadow-pop:  0 8px 24px -8px rgb(17 24 33 / .18), 0 2px 6px -2px rgb(17 24 33 / .10);
+}
+
+/* 다크 — OS 설정 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --canvas:  13 18 24;
+    --surface: 22 28 36;
+    --sunken:  17 23 30;
+
+    --line:        40 49 60;
+    --line-strong: 58 69 83;
+
+    /* 램프 반전 — 50 이 가장 어둡다 */
+    --ink-50:  17 23 30;
+    --ink-100: 25 32 41;
+    --ink-200: 40 49 60;
+    --ink-300: 58 69 83;
+    --ink-400: 110 124 139;
+    --ink-500: 147 160 174;
+    --ink-600: 176 187 199;
+    --ink-700: 194 204 215;
+    --ink-800: 214 222 231;
+    --ink-900: 231 236 242;
+
+    --ch-cp: 138 117 245;
+    --ch-nv: 18 161 143;
+    --ch-st: 188 130 24;
+    --ch-em: 124 134 240;
+
+    --ok:   55 178 107;
+    --warn: 224 162 43;
+    --crit: 241 101 106;
+    --info: 93 156 238;
+
+    --ok-soft:   16 37 26;
+    --warn-soft: 42 31 13;
+    --crit-soft: 43 21 24;
+    --info-soft: 18 32 58;
+
+    --shadow-card: 0 1px 2px 0 rgb(0 0 0 / .4);
+    --shadow-pop:  0 8px 24px -8px rgb(0 0 0 / .55), 0 2px 6px -2px rgb(0 0 0 / .4);
+  }
+}
+
+/* 다크 — 사용자가 명시적으로 고른 경우 (미디어쿼리를 이긴다) */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas:  13 18 24;
+  --surface: 22 28 36;
+  --sunken:  17 23 30;
+
+  --line:        40 49 60;
+  --line-strong: 58 69 83;
+
+  --ink-50:  17 23 30;
+  --ink-100: 25 32 41;
+  --ink-200: 40 49 60;
+  --ink-300: 58 69 83;
+  --ink-400: 110 124 139;
+  --ink-500: 147 160 174;
+  --ink-600: 176 187 199;
+  --ink-700: 194 204 215;
+  --ink-800: 214 222 231;
+  --ink-900: 231 236 242;
+
+  --ch-cp: 138 117 245;
+  --ch-nv: 18 161 143;
+  --ch-st: 188 130 24;
+  --ch-em: 124 134 240;
+
+  --ok:   55 178 107;
+  --warn: 224 162 43;
+  --crit: 241 101 106;
+  --info: 93 156 238;
+
+  --ok-soft:   16 37 26;
+  --warn-soft: 42 31 13;
+  --crit-soft: 43 21 24;
+  --info-soft: 18 32 58;
+
+  --shadow-card: 0 1px 2px 0 rgb(0 0 0 / .4);
+  --shadow-pop:  0 8px 24px -8px rgb(0 0 0 / .55), 0 2px 6px -2px rgb(0 0 0 / .4);
+}
+
+/* 현재 채널 액센트.
+   셸이 <div data-channel="coupang|smartstore|elevenst|esm|all"> 로 감싸면
+   그 안의 bg-accent / text-accent / border-accent 가 채널색을 따라간다.
+   기본값(all)은 중립 잉크 — 전체 탭에서 특정 채널색이 튀지 않게. */
+:root,
+[data-channel="all"]        { --accent: var(--ink-900); --accent-fg: var(--surface); }
+[data-channel="coupang"]    { --accent: var(--ch-cp);   --accent-fg: 255 255 255; }
+[data-channel="smartstore"] { --accent: var(--ch-nv);   --accent-fg: 255 255 255; }
+[data-channel="elevenst"]   { --accent: var(--ch-st);   --accent-fg: 255 255 255; }
+[data-channel="esm"]        { --accent: var(--ch-em);   --accent-fg: 255 255 255; }
+
+html, body {
+  background: rgb(var(--canvas));
+  color: rgb(var(--ink-900));
+  font-family: 'Pretendard Variable', 'Pretendard', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 숫자 정렬 — 표·지표에서 자릿수가 흔들리지 않게 */
+.tnum { font-variant-numeric: tabular-nums; }

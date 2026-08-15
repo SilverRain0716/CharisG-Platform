@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<!--
+  banner_1_brand.html — 브랜드/정품 배너 (2026-08-07 축소)
+
+  1,283px → 목표 600px대. 문자수(203)보다 세로가 문제였다: 한 배너에 "정품 인증" 과
+  "4가지 이유" 두 주제가 들어 있고, 카드 4개마다 설명 2줄(총 8줄)이 붙어 있었다.
+
+  ★삭제
+   · 카드 설명 8줄 전량 — 제목의 동어반복이었다.
+     예) "검증된 글로벌 소싱" 밑에 "해외 공식 유통망을 통한 / 신뢰할 수 있는 제품 확보"
+   · 번호 뱃지(1~4) — 순서에 의미가 없어 장식일 뿐이었다.
+   · "해외에서 A/S 가능한 정품만을 판매합니다" (2026-08-07 선행 제거)
+     banner_4 "국내 A/S는 제공되지 않습니다" 와 같은 페이지에서 정반대로 읽혔다.
+
+  ★문구 정정 (표시광고 리스크)
+   · "빠른 고객 응대 / 늦은 시간에도 1:1 상담" → "신속한 고객 응대"
+     24시간 대응을 실제로 하지 않으면 '늦은 시간에도' 는 부당광고 소지가 있다.
+   · "빠르고 안전한 배송 / 안전하고 빠른 배송" → "안전한 택배 배송"
+     banner_2 가 "약 7~20일" 이라 '빠른 배송' 은 과장이 된다. 또 '국내 택배사' 표현은
+     해외직배송 상품을 국내배송으로 오인시킬 수 있어 뺐다.
+   · 정품 메시지 3회 반복 → 1회 + 보조 1줄.
+
+  ★로고 블록은 넣지 않는다 — 쿠팡은 계정이 여러 개라 로고를 넣으면 계속 바꿔야 한다.
+    네이버(PA_SECTION_AUTH)에는 로고를 유지하는 채널 variant 로 간다.
+
+  수정 후 반드시 재렌더: python -m backend.purchase.scripts.render_coupang_banners
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0; font-family: 'Noto Sans KR', sans-serif; background: #fff; }
+</style>
+</head>
+<body>
+<div style="max-width:860px;margin:0 auto;font-family:'Noto Sans KR',sans-serif">
+<div style="background:linear-gradient(135deg,#1B3A5C 0%,#0F2640 100%);padding:44px 40px 40px;text-align:center">
+  <div style="width:76px;height:76px;margin:0 auto 20px;background:linear-gradient(145deg,#F5D77A,#D4A843,#F5D77A);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 20px rgba(212,168,67,0.4)">
+    <span style="font-size:17px;font-weight:800;color:#5C3D0E;text-align:center;line-height:1.3">정품<br>인증</span>
+  </div>
+  <div style="font-size:40px;font-weight:800;color:#fff;margin-bottom:12px">본 제품은 <span style="color:#E8845A">100% 정품</span>입니다.</div>
+  <p style="font-size:20px;color:rgba(255,255,255,0.6);line-height:1.6;margin:0">공식 유통 제품만 취급하며, 가품은 판매하지 않습니다.</p>
+</div>
+<div style="background:#F7F5F0;padding:36px 40px 40px;text-align:center">
+  <div style="font-size:17px;color:#E8845A;font-weight:700;letter-spacing:3px;margin-bottom:24px">WHY US</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:660px;margin:0 auto">
+    <div style="background:#fff;border-radius:14px;padding:22px 16px;box-shadow:0 2px 10px rgba(0,0,0,0.05)">
+      <span style="font-size:40px;display:block;margin-bottom:10px">🏢</span>
+      <div style="font-size:21px;font-weight:700;color:#1B3A5C">검증된 글로벌 소싱</div>
+    </div>
+    <div style="background:#fff;border-radius:14px;padding:22px 16px;box-shadow:0 2px 10px rgba(0,0,0,0.05)">
+      <span style="font-size:40px;display:block;margin-bottom:10px">💬</span>
+      <div style="font-size:21px;font-weight:700;color:#1B3A5C">신속한 고객 응대</div>
+    </div>
+    <div style="background:#fff;border-radius:14px;padding:22px 16px;box-shadow:0 2px 10px rgba(0,0,0,0.05)">
+      <span style="font-size:40px;display:block;margin-bottom:10px">📦</span>
+      <div style="font-size:21px;font-weight:700;color:#1B3A5C">꼼꼼한 검수 포장</div>
+    </div>
+    <div style="background:#fff;border-radius:14px;padding:22px 16px;box-shadow:0 2px 10px rgba(0,0,0,0.05)">
+      <span style="font-size:40px;display:block;margin-bottom:10px">🚚</span>
+      <div style="font-size:21px;font-weight:700;color:#1B3A5C">안전한 택배 배송</div>
+    </div>
+  </div>
+</div>
+</div>
+</body>
+</html>

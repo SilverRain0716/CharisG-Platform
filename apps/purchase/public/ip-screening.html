@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1340, initial-scale=1">
+<title>지식재산권(IP) 사전검수 · CharisG</title>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; font-family:'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif; }
+body { background:#f1f5f9; color:#0f172a; }
+.topbar { background:#0f172a; color:#fff; display:flex; align-items:center; gap:18px; padding:0 24px; height:54px; }
+.logo { font-weight:800; font-size:16px; letter-spacing:-.3px; }
+.logo span { color:#818cf8; }
+.nav { display:flex; gap:4px; font-size:13px; flex-wrap:wrap; }
+.nav-item { padding:7px 11px; border-radius:7px; color:#cbd5e1; }
+.nav-item.active { background:#6366f1; color:#fff; font-weight:700; }
+.wrap { padding:26px 30px; max-width:1340px; margin:0 auto; }
+.h1 { font-size:23px; font-weight:800; letter-spacing:-.5px; }
+.badge-live { display:inline-block; background:#dcfce7; color:#15803d; font-weight:700; font-size:12px; padding:3px 10px; border-radius:999px; margin-left:8px; vertical-align:middle; }
+.sub { color:#64748b; font-size:13px; margin-top:5px; }
+.cards { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin:20px 0 8px; }
+.card { background:#fff; border:1px solid #e2e8f0; border-radius:13px; padding:16px 18px; }
+.card .k { font-size:12px; color:#64748b; font-weight:600; }
+.card .v { font-size:26px; font-weight:800; margin-top:6px; letter-spacing:-.5px; }
+.card .u { font-size:12px; color:#94a3b8; margin-top:2px; }
+.card.accent .v { color:#4f46e5; } .card.red .v { color:#dc2626; } .card.green .v { color:#16a34a; }
+.panel { background:#fff; border:1px solid #e2e8f0; border-radius:13px; overflow:hidden; margin-top:18px; }
+.panel-h { padding:13px 18px; border-bottom:1px solid #eef2f7; font-weight:700; font-size:14px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+.panel-h .meta { font-size:12px; color:#94a3b8; font-weight:500; }
+.kr { padding:14px 18px; }
+.kr-q { font-size:13px; color:#475569; display:inline-block; margin-right:10px; }
+.kr-q b { color:#4f46e5; }
+.kr-status { display:inline-block; background:#fffbeb; color:#d97706; font-weight:800; font-size:12px; padding:3px 10px; border-radius:999px; }
+.kr-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:2px 24px; margin-top:10px; }
+.kr-item { border-top:1px solid #f1f5f9; padding:7px 0; }
+.kr-name { font-weight:700; font-size:13px; }
+.kr-num { font-size:11px; color:#94a3b8; }
+.toolbar { display:flex; align-items:center; gap:8px; }
+.tab { border:none; background:none; padding:6px 12px; border-radius:7px; font-size:13px; font-weight:600; color:#64748b; cursor:pointer; }
+.tab.active { background:#6366f1; color:#fff; }
+.search { border:1px solid #cbd5e1; border-radius:7px; padding:5px 9px; font-size:13px; width:190px; }
+.btn { border:none; background:#6366f1; color:#fff; border-radius:7px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer; }
+table { width:100%; border-collapse:collapse; font-size:12.5px; }
+th { text-align:left; padding:9px 12px; background:#f8fafc; color:#475569; font-weight:700; font-size:11.5px; border-bottom:1px solid #eef2f7; white-space:nowrap; }
+td { padding:8px 12px; border-bottom:1px solid #f1f5f9; vertical-align:middle; }
+tr.rowbad td { background:#fef6f6; }
+.mono { font-family:ui-monospace,monospace; color:#475569; font-size:11.5px; }
+.brand { font-weight:700; }
+.title { color:#475569; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rec { font-size:11px; color:#94a3b8; }
+.chip { display:inline-block; font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px; white-space:nowrap; }
+.chip.ok { background:#f0fdf4; color:#16a34a; } .chip.bad { background:#fef2f2; color:#dc2626; }
+.chip.warn { background:#fffbeb; color:#d97706; } .chip.idle { background:#f1f5f9; color:#94a3b8; }
+.verdict { display:inline-block; font-size:11.5px; font-weight:800; padding:4px 10px; border-radius:7px; }
+.verdict.ok { background:#dcfce7; color:#15803d; } .verdict.bad { background:#fee2e2; color:#b91c1c; }
+.pager { display:flex; justify-content:space-between; align-items:center; padding:11px 18px; border-top:1px solid #eef2f7; gap:10px; }
+.pager .note { font-size:11.5px; color:#94a3b8; }
+.pbtn { border:1px solid #cbd5e1; background:#fff; border-radius:7px; padding:5px 12px; font-size:13px; cursor:pointer; }
+.pbtn:disabled { opacity:.4; cursor:default; }
+.state { padding:50px; text-align:center; color:#64748b; font-size:14px; }
+.err { color:#b91c1c; }
+.foot { color:#94a3b8; font-size:11.5px; margin-top:14px; text-align:right; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">Charis<span>G</span> · 구매대행</div>
+  <div class="nav" id="nav"></div>
+</div>
+<div class="wrap">
+  <div class="h1">지식재산권(IP) 사전검수 <span class="badge-live">● LIVE</span></div>
+  <div class="sub">상품 등록 전 4중 IP 게이트 자동 검수 — 브랜드 게이트 · 정책/IP 키워드 · 한국 제조사 · KIPRIS 국내 등록 IP 라이브 대조</div>
+
+  <div id="overview"><div class="state">검수 요약 불러오는 중…</div></div>
+
+  <div class="panel">
+    <div class="panel-h">
+      <span>전체 상품 IP 검수 목록</span>
+      <div class="toolbar">
+        <button class="tab active" data-f="all">전체</button>
+        <button class="tab" data-f="blocked">차단·검수기록</button>
+        <button class="tab" data-f="pass">통과</button>
+        <input class="search" id="q" placeholder="브랜드 또는 ASIN 검색">
+        <button class="btn" id="searchBtn">검색</button>
+      </div>
+    </div>
+    <div id="listMeta" class="panel-h" style="border-top:none;color:#94a3b8;font-size:12px;font-weight:500"></div>
+    <div id="listBody"><div class="state">목록 불러오는 중…</div></div>
+    <div class="pager">
+      <div class="note">브랜드 게이트·정책/IP 키워드·한국 제조사 게이트는 실시간 검수. KIPRIS는 브랜드별 국내 등록 IP를 사전 조회·캐시하여 표시(미조회 브랜드는 '대기', 쿼터 보호).</div>
+      <div>
+        <button class="pbtn" id="prev">이전</button>
+        <span id="pageInfo" style="font-size:13px;margin:0 6px">—</span>
+        <button class="pbtn" id="next">다음</button>
+      </div>
+    </div>
+  </div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+const NAV = ["지식재산권 검수"];
+document.getElementById("nav").innerHTML = NAV.map(n => `<span class="nav-item ${n==="지식재산권 검수"?"active":""}">${n}</span>`).join("");
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const chip=(c,t)=>`<span class="chip ${c}">${esc(t)}</span>`;
+function cell(c){ if(!c) return "—"; const st=c.status;
+  if(st==="통과")return chip("ok","통과"); if(st==="대기")return chip("idle","대기");
+  if(st==="수동검토")return chip("warn",`수동검토 · ${c.hits||0}건`);
+  return chip("bad", c.matched?`차단: ${c.matched}`:"차단"); }
+const num=n=>(n||0).toLocaleString("ko-KR");
+
+// 상단 요약 + KIPRIS
+(async function(){
+  try{
+    const r = await fetch("/api/pa/ip-screening/public",{headers:{Accept:"application/json"}});
+    const d = await r.json(); const s=d.summary, dm=d.kipris_demo;
+    document.getElementById("overview").innerHTML = `
+      <div class="cards">
+        <div class="card accent"><div class="k">검수 대상 상품</div><div class="v">${num(s.catalog_total)}</div><div class="u">전체 카탈로그</div></div>
+        <div class="card red"><div class="k">IP·정책 차단 누적</div><div class="v">${num(s.flagged_total)}</div><div class="u">사전 차단·수동검토</div></div>
+        <div class="card"><div class="k">브랜드 게이트</div><div class="v">${s.blocklist_keywords}</div><div class="u">정품 게이팅 키워드</div></div>
+        <div class="card"><div class="k">정책·IP 키워드</div><div class="v">${s.ip_keywords}</div><div class="u">저작권/상표/캐릭터</div></div>
+        <div class="card green"><div class="k">KIPRIS 연동</div><div class="v" style="font-size:19px;padding-top:5px">${s.kipris_enabled?"라이브":"대기"}</div><div class="u">한국특허정보원 API</div></div>
+      </div>
+      <div class="panel"><div class="panel-h">KIPRIS 라이브 조회 — 한국특허정보원 권리자 대조</div>
+        <div class="kr">
+          <span class="kr-q">질의 브랜드 <b>"${esc(dm.query)}"</b></span>
+          <span class="kr-status">⚠ ${esc(dm.status)} — 국내 등록 권리자 ${(dm.matches||[]).length}건</span>
+          <div class="kr-grid">${(dm.matches||[]).slice(0,6).map(m=>`<div class="kr-item"><div class="kr-name">${esc(m.name)}</div><div class="kr-num">권리자번호 ${esc(m.person_number)}</div></div>`).join("")}</div>
+        </div>
+      </div>`;
+    document.getElementById("foot").textContent = `CharisG 상품관리 · 지식재산권 사전검수 모듈 — 갱신 ${(d.generated_at||"").slice(0,19)} UTC · 한국특허정보원 KIPRIS Plus 연동`;
+  }catch(e){ document.getElementById("overview").innerHTML = `<div class="state err">요약을 불러오지 못했습니다.</div>`; }
+})();
+
+// 전체 목록 (페이지네이션/필터/검색)
+let st = { page:1, filter:"all", q:"" };
+async function loadList(){
+  document.getElementById("listBody").innerHTML = `<div class="state">불러오는 중…</div>`;
+  try{
+    const p = new URLSearchParams({ page:st.page, page_size:50, filter:st.filter, q:st.q });
+    const r = await fetch(`/api/pa/ip-screening/list/public?${p}`,{headers:{Accept:"application/json"}});
+    const d = await r.json();
+    const rows = (d.rows||[]).map(r=>`
+      <tr class="${r.blocked?"rowbad":""}">
+        <td class="mono">${esc(r.asin)}</td>
+        <td class="brand">${esc(r.brand)}</td>
+        <td class="title">${esc(r.title_ko)}</td>
+        <td>${cell(r.checks.brand_gate)}</td>
+        <td>${cell(r.checks.ip_keyword)}</td>
+        <td>${cell(r.checks.korean_mfr)}</td>
+        <td>${cell(r.checks.kipris)}</td>
+        <td><span class="verdict ${r.blocked?"bad":"ok"}">${r.blocked?"차단·수동검토":"통과"}</span></td>
+        <td class="rec">${r.violation_keyword?esc((r.violation_flags||"위반")+" / "+r.violation_keyword):"—"}</td>
+      </tr>`).join("");
+    document.getElementById("listBody").innerHTML = `
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>ASIN</th><th>브랜드</th><th>상품명</th><th>브랜드 게이트</th><th>정책·IP 키워드</th><th>한국 제조사</th><th>KIPRIS</th><th>판정</th><th>검수 기록</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="9" class="state">결과 없음</td></tr>'}</tbody>
+      </table></div>`;
+    document.getElementById("listMeta").textContent = `총 ${num(d.total)}건 · ${num(d.page)} / ${num(d.total_pages)} 페이지`;
+    document.getElementById("pageInfo").textContent = `${d.page} / ${d.total_pages}`;
+    document.getElementById("prev").disabled = d.page<=1;
+    document.getElementById("next").disabled = d.page>=d.total_pages;
+    st._totalPages = d.total_pages;
+  }catch(e){ document.getElementById("listBody").innerHTML = `<div class="state err">목록을 불러오지 못했습니다.</div>`; }
+}
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active"); st.filter=b.dataset.f; st.page=1; loadList();
+});
+document.getElementById("searchBtn").onclick=()=>{ st.q=document.getElementById("q").value.trim(); st.page=1; loadList(); };
+document.getElementById("q").addEventListener("keydown",e=>{ if(e.key==="Enter"){ st.q=e.target.value.trim(); st.page=1; loadList(); }});
+document.getElementById("prev").onclick=()=>{ if(st.page>1){ st.page--; loadList(); }};
+document.getElementById("next").onclick=()=>{ if(st.page<st._totalPages){ st.page++; loadList(); }};
+loadList();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+[Unit]
+Description=Run PA 쿠팡 정산 수집 daily (23:20 KST = 14:20 UTC, quiet slot)
+
+[Timer]
+OnCalendar=*-*-* 14:20:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

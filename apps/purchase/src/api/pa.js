@@ -1,0 +1,219 @@
+import { apiFetch } from '@charisg/auth';
+
+export const pa = {
+  ipScreening:       () => apiFetch('/api/pa/ip-screening'),
+  ipScreeningList:   ({ page = 1, page_size = 50, filter = 'all', q = '' } = {}) =>
+    apiFetch(`/api/pa/ip-screening/list?${new URLSearchParams({ page, page_size, filter, q })}`),
+  summary:        () => apiFetch('/api/pa/summary'),
+  // ★채널·계정 스코프를 넘긴다. 안 넘기면 어느 탭에서나 같은 전역 숫자가 나온다.
+  dashboard:      (scope) => {
+    const q = new URLSearchParams();
+    if (scope?.channel && scope.channel !== 'all') q.set('channel', scope.channel);
+    if (scope?.account) q.set('account', scope.account);
+    const s = q.toString();
+    return apiFetch(`/api/pa/dashboard${s ? `?${s}` : ''}`);
+  },
+
+  // Discovery — 5단계 풀 파이프라인 (카테고리 추적 기반)
+  discoveryCategories: () => apiFetch('/api/pa/discovery/categories'),
+  syncCategories:      () => apiFetch('/api/pa/discovery/categories/sync', { method: 'POST' }),
+  toggleCategory:      (cid, tracked) => apiFetch(`/api/pa/discovery/categories/${cid}`, { method: 'PATCH', body: { tracked } }),
+  discoveryRun:        () => apiFetch('/api/pa/discovery/run', { method: 'POST' }),
+  discoveryStatus:     () => apiFetch('/api/pa/discovery/status'),
+
+  trends:         (cat = '50000000', days = 30) => apiFetch(`/api/pa/datalab/trends?category_param=${cat}&days=${days}`),
+  keywords:       (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/keywords${q ? '?' + q : ''}`);
+  },
+  clusters:       () => apiFetch('/api/pa/keywords/clusters'),
+  runCluster:     (keywords) => apiFetch('/api/pa/keywords/cluster', { method: 'POST', body: { keywords } }),
+  searchadVolumes: (keywords) => apiFetch('/api/pa/searchad/volumes', { method: 'POST', body: { keywords } }),
+
+  // Sourcing
+  sourcing:             (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/sourcing${q ? '?' + q : ''}`);
+  },
+  importSheet:          (sheet_url) => apiFetch('/api/pa/sourcing/import-sheet', { method: 'POST', body: { sheet_url } }),
+  sheetQueue:           () => apiFetch('/api/pa/sourcing/queue'),
+  bulkDeleteCandidates: (ids) => apiFetch('/api/pa/sourcing/bulk-delete', { method: 'POST', body: { ids } }),
+  promoteAllSourcing:   () => apiFetch('/api/pa/sourcing/promote-all', { method: 'POST', body: {} }),
+
+  // Customs
+  customsQuick:   (req) => apiFetch('/api/pa/customs/quick', { method: 'POST', body: req }),
+  customsTariff:  (req) => apiFetch('/api/pa/customs/tariff', { method: 'POST', body: req }),
+
+  // Products
+  products:       (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/products${q ? '?' + q : ''}`);
+  },
+  product:        (id) => apiFetch(`/api/pa/products/${id}`),
+  setProductStatus: (id, status) => apiFetch(`/api/pa/products/${id}/status`, { method: 'PATCH', body: { status } }),
+  bulkDeleteProducts: (body) => apiFetch('/api/pa/products/bulk-delete', { method: 'POST', body }),
+
+  // Detail page
+  generateDetail: (pid) => apiFetch(`/api/pa/detail-page/${pid}/generate`, { method: 'POST' }),
+  startBatchJob: (body) => apiFetch('/api/pa/detail-page/batch', { method: 'POST', body }),
+  getBatchJobStatus: (jobId) => apiFetch(`/api/pa/detail-page/batch/${jobId}`),
+  getCurrentBatchJob: () => apiFetch('/api/pa/detail-page/batch'),
+  getDetailPage: (pid) => apiFetch(`/api/pa/detail-page/${pid}`),
+
+  // Channel listing
+  sendToChannel:    (pid, channels) => apiFetch(`/api/pa/products/${pid}/send-to-channel`, { method: 'POST', body: { channels } }),
+  bulkSendToChannel: () => apiFetch('/api/pa/products/bulk-send-to-channel', { method: 'POST', body: {} }),
+  smartstoreListings: (params = {}) => {
+    const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null));
+    const q = new URLSearchParams(clean).toString();
+    return apiFetch(`/api/pa/smartstore/listings${q ? '?' + q : ''}`);
+  },
+  coupangListings:    (params = {}) => {
+    const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null));
+    const q = new URLSearchParams(clean).toString();
+    return apiFetch(`/api/pa/coupang/listings${q ? '?' + q : ''}`);
+  },
+
+  // Channel-side product count (API 직접 조회, 1시간 캐시)
+  smartstoreProductCount: (refresh = false) =>
+    apiFetch(`/api/pa/smartstore/products/count${refresh ? '?refresh=true' : ''}`),
+  coupangProductCount:    (refresh = false) =>
+    apiFetch(`/api/pa/coupang/seller-products/count${refresh ? '?refresh=true' : ''}`),
+
+  // Upload
+  uploadSmartstore: (pid) => apiFetch(`/api/pa/smartstore/upload/${pid}`, { method: 'POST' }),
+  uploadCoupang:    (pid) => apiFetch(`/api/pa/coupang/upload/${pid}`, { method: 'POST' }),
+  uploadAllSmartstore:       () => apiFetch('/api/pa/smartstore/upload-all', { method: 'POST' }),
+  uploadAllCoupang:          () => apiFetch('/api/pa/coupang/upload-all', { method: 'POST' }),
+  smartstoreUploadJob:       () => apiFetch('/api/pa/smartstore/upload-job'),
+  smartstoreUploadStatus:    (jobId) => apiFetch(`/api/pa/smartstore/upload-all/${jobId}`),
+  coupangUploadJob:          () => apiFetch('/api/pa/coupang/upload-job'),
+  coupangUploadStatus:       (jobId) => apiFetch(`/api/pa/coupang/upload-all/${jobId}`),
+
+  // 신계정 (카리스글로벌, A01731680) 업로드 — pa-api 프로세스 default(구계정)와 분리
+  newAccountUploadSingle: (body) => apiFetch('/api/pa/coupang-new/upload-single', { method: 'POST', body }),
+  newAccountUploadGroup:  (body) => apiFetch('/api/pa/coupang-new/upload-group',  { method: 'POST', body }),
+  newAccountUploadJob:    (jobId) => apiFetch(`/api/pa/coupang-new/job/${jobId}`),
+  newAccountRegroupStatus: () => apiFetch('/api/pa/coupang-new/regroup/status'),
+
+  // Coupang 속성 보정 (MANDATORY 누락 excluded 복구)
+  coupangExcluded:           () => apiFetch('/api/pa/coupang/excluded'),
+  coupangSaveAttrsBulk:      (items) => apiFetch('/api/pa/coupang/attributes/bulk', { method: 'POST', body: { items } }),
+  coupangRestorePending:     (productIds) => apiFetch('/api/pa/coupang/restore-pending', { method: 'POST', body: { product_ids: productIds } }),
+  coupangReextractStrict:    (body) => apiFetch('/api/pa/coupang/reextract-strict', { method: 'POST', body }),
+  coupangReextractStatus:    (jobId) => apiFetch(`/api/pa/coupang/reextract-strict/${jobId}`),
+
+  // Settlement (정산 — 채널: coupang | naver. 월별 지급 + 건별 상세)
+  settlementSummary: (params = {}) => {
+    const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null));
+    const q = new URLSearchParams(clean).toString();
+    return apiFetch(`/api/pa/settlement/summary${q ? '?' + q : ''}`);
+  },
+  settlementRevenue: (params = {}) => {
+    const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null));
+    const q = new URLSearchParams(clean).toString();
+    return apiFetch(`/api/pa/settlement/revenue${q ? '?' + q : ''}`);
+  },
+  settlementStatus: (channel = 'coupang') => apiFetch(`/api/pa/settlement/status?channel=${channel}`),
+  syncSettlement:   (body = {}) => apiFetch('/api/pa/settlement/sync', { method: 'POST', body }),
+
+  // Category mapping (Fix 1-D)
+  categoryMappings: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/category-map${q ? '?' + q : ''}`);
+  },
+  createCategoryMapping: (body) => apiFetch('/api/pa/category-map', { method: 'POST', body }),
+  updateCategoryMapping: (id, body) => apiFetch(`/api/pa/category-map/${id}`, { method: 'PUT', body }),
+  deleteCategoryMapping: (id) => apiFetch(`/api/pa/category-map/${id}`, { method: 'DELETE' }),
+  lookupCategoryMapping: (body) => apiFetch('/api/pa/category-map/lookup', { method: 'POST', body }),
+  categoryReviews: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/category-review${q ? '?' + q : ''}`);
+  },
+  approveCategoryReview: (id, body) => apiFetch(`/api/pa/category-review/${id}/approve`, { method: 'PUT', body }),
+  rejectCategoryReview: (id, body) => apiFetch(`/api/pa/category-review/${id}/reject`, { method: 'PUT', body }),
+  searchNaverCategory: (q, limit = 20) =>
+    apiFetch(`/api/pa/category-map/search-naver?q=${encodeURIComponent(q)}&limit=${limit}`),
+  searchCoupangCategory: (q, limit = 20) =>
+    apiFetch(`/api/pa/category-map/search-coupang?q=${encodeURIComponent(q)}&limit=${limit}`),
+
+  // Orders
+  ordersKanban:   (account) => apiFetch(`/api/pa/orders/kanban${account ? '?account=' + account : ''}`),
+  orders:         (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/orders${q ? '?' + q : ''}`);
+  },
+  order:          (id) => apiFetch(`/api/pa/orders/${id}`),
+  advance:        (id, step, note) => apiFetch(`/api/pa/orders/${id}/advance`, { method: 'PATCH', body: { step, note } }),
+  tracking:       (id) => apiFetch(`/api/pa/tracking/${id}`),
+  orderAmazonPrep: (oid) => apiFetch(`/api/pa/orders/${oid}/amazon-prep`),
+  translateOrder:  (oid) => apiFetch(`/api/pa/orders/${oid}/translate`, { method: 'POST' }),
+  setAmazonOrder:  (oid, body) => apiFetch(`/api/pa/orders/${oid}/amazon-order`, { method: 'PATCH', body }),
+  releaseAddress:        () => apiFetch('/api/pa/settings/release-address'),
+  refreshReleaseAddress: () => apiFetch('/api/pa/settings/release-address/refresh', { method: 'POST' }),
+
+  // Groups (variation 통합 등록)
+  groupsList:  (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/groups${q ? '?' + q : ''}`);
+  },
+  groupsStats: (channel = 'coupang') => apiFetch(`/api/pa/groups/stats?channel=${channel}`),
+  groupGet:    (parent_asin, channel = 'coupang') => apiFetch(`/api/pa/groups/${parent_asin}?channel=${channel}`),
+  groupSaveRule: (parent_asin, body) => apiFetch(`/api/pa/groups/${parent_asin}/save-rule`, { method: 'POST', body }),
+  groupPayload: (parent_asin, channel = 'smartstore', split_index = 0) =>
+    apiFetch(`/api/pa/groups/${parent_asin}/payload?channel=${channel}&split_index=${split_index}`),
+  groupExtend:  (parent_asin, body) =>
+    apiFetch(`/api/pa/groups/${parent_asin}/extend`, { method: 'POST', body }),
+  groupBackfillChildren: (parent_asin) =>
+    apiFetch(`/api/pa/groups/${parent_asin}/backfill-children`, { method: 'POST' }),
+  groupBackfillStatus: (job_id) =>
+    apiFetch(`/api/pa/groups/backfill/${job_id}`),
+  groupBackfillActive: (parent_asin) =>
+    apiFetch(`/api/pa/groups/${parent_asin}/backfill/active`),
+
+  // CS
+  cs:             (status) => apiFetch(`/api/pa/cs${status ? '?status=' + status : ''}`),
+  createCs:       (req) => apiFetch('/api/pa/cs', { method: 'POST', body: req }),
+  resolveCs:      (id, final_response) => apiFetch(`/api/pa/cs/${id}/resolve`, { method: 'PATCH', body: { final_response } }),
+
+  // Returns
+  returns:        () => apiFetch('/api/pa/returns'),
+
+  // Monitor
+  stockAlerts:    () => apiFetch('/api/pa/monitor/stock'),
+  marginAlerts:   () => apiFetch('/api/pa/monitor/margin'),
+
+  // Settings
+  settings:       () => apiFetch('/api/pa/settings'),
+  putSetting:     (key, value) => apiFetch('/api/pa/settings', { method: 'PUT', body: { key, value } }),
+  pricingSettings: () => apiFetch('/api/pa/settings/pricing'),
+  updatePricing:  (body) => apiFetch('/api/pa/settings/pricing', { method: 'PUT', body }),
+
+  // Product price override
+  updateProductPrice: (pid, sale_price_krw) =>
+    apiFetch(`/api/pa/products/${pid}/price`, { method: 'PATCH', body: { sale_price_krw } }),
+
+  // SmartStore attributes
+  attrPending:       () => apiFetch('/api/pa/smartstore/attributes/pending'),
+  attrGet:           (pid) => apiFetch(`/api/pa/smartstore/attributes/${pid}`),
+  attrInfer:         (pid) => apiFetch(`/api/pa/smartstore/attributes/${pid}/infer`, { method: 'POST' }),
+  attrSave:          (pid, attributes) => apiFetch(`/api/pa/smartstore/attributes/${pid}`, { method: 'PUT', body: { attributes } }),
+  attrBatchInfer:    (body) => apiFetch('/api/pa/smartstore/attributes/batch-infer', { method: 'POST', body }),
+  attrBatchAll:      () => apiFetch('/api/pa/smartstore/attributes/batch-all', { method: 'POST' }),
+  attrBatchAllStatus: () => apiFetch('/api/pa/smartstore/attributes/batch-all/status'),
+
+  // 문자 발송 (주문 상세 수동 발송)
+  smsBalance:  () => apiFetch('/api/pa/orders/sms/balance'),
+  smsHistory:  (oid) => apiFetch(`/api/pa/orders/${oid}/sms`),
+  sendSms:     (oid, body) => apiFetch(`/api/pa/orders/${oid}/sms`, { method: 'POST', body }),
+
+  // Automation 탭 — 파이프라인/게이트/워커/에러
+  automationPipeline: () => apiFetch('/api/pa/automation/pipeline'),
+  automationGates:    () => apiFetch('/api/pa/automation/gates'),
+  automationWorkers:  () => apiFetch('/api/pa/automation/workers'),
+  automationLive:     () => apiFetch('/api/pa/automation/live'),
+  automationErrors:   (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiFetch(`/api/pa/automation/errors${q ? '?' + q : ''}`);
+  },
+};

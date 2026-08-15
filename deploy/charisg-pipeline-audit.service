@@ -1,0 +1,10 @@
+[Unit]
+Description=CharisG PA — daily pipeline stage audit (funnel + silent-failure detection)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ubuntu/CharisG-Platform/charisg-platform
+Environment=PYTHONPATH=/home/ubuntu/CharisG-Platform/charisg-platform
+ExecStart=/bin/bash -c "echo \"===== $(date -u +%%FT%%TZ) =====\" >> /home/ubuntu/logs/pipeline_audit.log; /home/ubuntu/CharisG-Platform/charisg-platform/.venv/bin/python -m backend.purchase.scripts.pipeline_audit --recent 7 >> /home/ubuntu/logs/pipeline_audit.log 2>&1"
+TimeoutStartSec=15min

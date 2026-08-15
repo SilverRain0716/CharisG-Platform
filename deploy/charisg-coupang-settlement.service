@@ -1,0 +1,16 @@
+[Unit]
+Description=PA 쿠팡 정산 수집 (월별 지급 settlement-histories + 주문별 매출 revenue-history)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/CharisG-Platform/charisg-platform
+EnvironmentFile=-/home/ubuntu/CharisG-Platform/charisg-platform/.env
+Environment=PYTHONPATH=/home/ubuntu/CharisG-Platform/charisg-platform
+Environment=CHARISG_ROOT=/home/ubuntu/CharisG-Platform/charisg-platform
+ExecStart=/home/ubuntu/CharisG-Platform/charisg-platform/.venv/bin/python -m backend.purchase.scripts.sync_coupang_settlement
+StandardOutput=journal
+StandardError=journal
