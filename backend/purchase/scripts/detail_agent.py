@@ -31,7 +31,10 @@ BASE = Path("/home/ubuntu/CharisG-Platform/charisg-platform")
 sys.path.insert(0, str(BASE))
 from dotenv import load_dotenv
 load_dotenv(BASE / ".env", override=True)
-os.environ.setdefault("PA_SKIP_GEMINI", "1")
+# ★분류를 기본으로 켠다 (2026-08-15). 종전엔 "1"(스킵)이 기본이라 저작권 분류가
+#   통째로 꺼져 있었고, 전 이미지가 photo 로 폴백돼 브랜드 마케팅컷·모델컷이
+#   무검열로 상세에 들어갔다. 끄려면 PA_SKIP_GEMINI=1 을 명시할 것.
+os.environ.setdefault("PA_SKIP_GEMINI", "0")
 
 # AI_LEDGER 가 설정돼 있으면 호출을 원장에 기록(비용 측정용). 서브프로세스로 돌 때도 잡힌다.
 if os.environ.get("AI_LEDGER"):
@@ -166,8 +169,12 @@ def gather(pid: int) -> dict:
     try:
         from backend.purchase.services.image_classifier import classify_images
         cls = classify_images(pid) or {}
-    except Exception:
-        pass
+    except Exception as _e:      # noqa: BLE001
+        # ★조용히 넘어가면 안 된다 — 분류 없이 만든 상세는 브랜드 마케팅컷이
+        #   무검열로 들어간 상세다. 실행 중 '키1: HTTP 429' 를 실제로 봤다.
+        print("   ★저작권 분류 실패 — 전 이미지가 등급 미상이 된다: %s" % str(_e)[:70])
+    if not cls:
+        print("   ★저작권 분류 결과가 비었다 — PA_SKIP_GEMINI 또는 GEMINI 키를 확인할 것")
 
     # ★중복 컷 제거 — 아마존 원본은 같은 사진을 2벌씩 갖고 있는 경우가 흔하다(실측 11장 중 5쌍)
     from PIL import Image as _I
@@ -418,22 +425,53 @@ class ImagePool:
     def _free(self):
         return [im for im in self.pool if im["path"] not in self.used]
 
+    # ★저작권 등급 — 낮을수록 안전하다. marketing 은 브랜드가 만든 크리에이티브라
+    #   쿠팡 IP 신고의 주 대상이다(실측: 브랜드 원본 14장 중 photo 는 2장뿐인 경우도 있다).
+    GRADE = {"photo": 0, "lifestyle": 1, "marketing": 2}
+
     def take(self, section_type=None):
         if self.policy == "none":
             return None
         free = self._free()
         if not free:
             return None
-        for want in SECTION_WANT.get(section_type, ()):
-            for im in free:
-                if im.get("subject") == want:
-                    self.used.add(im["path"]); return im
-        # 선호 주제가 없으면 형식 우선순위로 폴백
-        order = {"photo": 0, "lifestyle": 1, "marketing": 2}
+
+        # ★등급을 주제보다 **먼저** 본다 (2026-08-15).
+        #   종전엔 주제를 먼저 맞추고 등급은 폴백이라, 분류를 켜도 배치가 안 바뀌었다 —
+        #   marketing 컷이라도 주제만 맞으면 그대로 들어갔다.
+        #   막지는 않는다. 안전한 등급을 다 쓴 뒤에만 다음 등급으로 내려간다.
+        for grade in (0, 1, 2):
+            band = [im for im in free if self.GRADE.get(im.get("kind"), 9) == grade]
+            if not band:
+                continue
+            for want in SECTION_WANT.get(section_type, ()):
+                for im in band:
+                    if im.get("subject") == want:
+                        self.used.add(im["path"])
+                        self._warn(im, section_type)
+                        return im
+            # 이 등급 안에 맞는 주제가 없다 → 다음 등급으로
         if section_type in ("compatibility", "howto", "spec_highlight"):
             return None          # ★맞는 컷이 없으면 아예 넣지 않는다(엉뚱한 사진 방지)
-        im = sorted(free, key=lambda x: (order.get(x["kind"], 9), x["idx"]))[0]
-        self.used.add(im["path"]); return im
+        # 주제가 안 맞아도 자리를 채워야 하는 섹션 — 등급 낮은 것부터
+        im = sorted(free, key=lambda x: (self.GRADE.get(x.get("kind"), 9), x["idx"]))[0]
+        self.used.add(im["path"])
+        self._warn(im, section_type)
+        return im
+
+    def _warn(self, im, section_type):
+        """위험한 컷을 쓸 때는 화면에 남긴다 — 조용히 쓰면 아무도 모른다.
+
+        ★unknown 은 안전한 게 아니라 **모르는 것**이다. 분류가 실패하면 전부 unknown 이
+          되는데, 그때 경고가 없으면 사람은 '분류가 됐겠지' 하고 넘어간다.
+        """
+        k = im.get("kind")
+        if k == "marketing":
+            print("   [주의] %s 섹션에 marketing 컷 사용 — 저작권 위험 (%s)"
+                  % (section_type or "?", Path(im["path"]).name))
+        elif k in (None, "", "unknown"):
+            print("   [주의] %s 섹션에 **등급 미상** 컷 사용 — 분류가 안 됐다 (%s)"
+                  % (section_type or "?", Path(im["path"]).name))
 
 
 def data_uri(im):
